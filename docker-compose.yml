@@ -1,0 +1,38 @@
+# docker compose up -d --build                      -> bot + SQLite stored in the "bot-data" volume
+# docker compose --profile postgres up -d --build   -> bot + PostgreSQL (set DATABASE_URL in .env, see below)
+# docker compose --profile mongo up -d --build      -> bot + MongoDB
+#
+# Easiest: python deploy.py --target docker   (asks for the values, generates the secrets, starts everything)
+# .env needs API_ID, API_HASH, BOT_TOKEN, SECRET_KEY, ALLOWED_USERS and, for a database below:
+#   DATABASE_URL=postgresql://bot:botpass@postgres:5432/bot
+#   DATABASE_URL=mongodb://mongo:27017/bot
+services:
+  bot:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - bot-data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-botpass}   # python deploy.py generates one and writes both this and DATABASE_URL
+      POSTGRES_DB: bot
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+  mongo:
+    image: mongo:7
+    profiles: ["mongo"]
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  bot-data:
+  pg-data:
+  mongo-data:
