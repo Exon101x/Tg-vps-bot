@@ -43,10 +43,14 @@ Render, Heroku or any VPS with Python 3.10+.
   **resume from the partial file** (`.part`). Flaky servers and redeploys are fine.
 * **Parallel windowed downloads** from Telegram (up to 16 windows × 16 MB on big hosts), with live speed and ETA.
 * **Files bigger than Telegram's 2 GB limit travel in both directions:**
-  * *to* a server: split once (7-Zip volumes or `split`), then `/multi` → send all parts → `/done` — the bot
-    joins them **on the fly** into one file on any FTP/FTPS/SFTP server (resumable, still no temp disk);
+  * *to* a server: **up to 4 GB, just send the file** — Premium users can upload up to 4 GB to Telegram, and
+    the bot streams those straight to any FTP/FTPS/SFTP server (no volumes, no temp disk). Beyond 4 GB (or
+    without Premium), split once (7-Zip volumes or `split`), then `/multi` → send all parts → `/done` — the bot
+    joins them **on the fly** into one file on any server (resumable, still no temp disk);
   * *from* a server: `/get` splits automatically into `.001 .002 …` volumes, staged one at a time and
     shrunk to the free disk.
+* `/ask on` puts a server picker under every file you send: forward or upload a file, tap the destination
+  server, and the bot sends it there — no need to switch the active server first.
 * `/fetch <url>` pulls any HTTP(S) download to the server (no size limit, resumable, SSRF-guarded).
 * Per-user folders with templates (`{user}/{date}`, `{type}/{year}-{month}`), duplicate policies
   (`overwrite` / `skip` / `rename`), several saved servers, remote file manager (`/ls /cd /mkdir /mv /rm`).
@@ -115,10 +119,10 @@ Full syntax, arguments and examples: **[docs/COMMANDS.md](docs/COMMANDS.md)**.
 | Servers | `/add` `/servers` `/use` `/del` `/status` `/monitor` `/audit` `/about` |
 | VPS admin (SSH) | `/vps` `/stats` `/ps` `/ports` `/logins` `/updates` `/disk` `/firewall` `/failed` `/service` `/logs` `/docker` `/upgrade` `/reboot` |
 | Shell | `/sh <cmd>` · `/term` (terminal mode) |
-| Files | send any file (streamed) · `/fetch` `/get` `/join` `/multi`+`/done` |
+| Files | send any file (streamed, up to 4 GB direct with Premium) · `/fetch` `/get` `/join` `/multi`+`/done` |
 | Remote filesystem | `/pwd` `/cd` `/ls` `/mkdir` `/mv` `/rm` |
 | Upload queue | `/queue` `/retry` `/stop` `/usage` |
-| Folders & duplicates | `/folder <template>` · `/ondup <policy>` |
+| Folders & duplicates | `/folder <template>` · `/ondup <policy>` · `/ask on|off` (server picker per file) |
 | Misc | `/start` `/help` `/cancel` `/perf` |
 
 ## Configuration
@@ -161,17 +165,20 @@ A typo in a numeric variable logs a warning and uses the default — the bot nev
 
 ## Moving large files (over 2 GB)
 
-Telegram's documented limit is 2 GB per file (4 GB for Premium senders; a bot account cannot send more than
-2 GB). The bot routes around that in both directions:
+Telegram's documented limit is 2 GB per file; **Premium accounts can upload up to 4 GB**, and the bot
+(MTProto, not the Bot API) downloads those whole — so 2–4 GB files transfer directly. Above 4 GB nothing
+can carry one file in Telegram, hence the volume workflows.
 
 | Direction | What happens |
 |---|---|
 | **Telegram → server**, up to 2 GB | streamed in parallel windows, queued, retried, resumed from the partial file |
-| **Telegram → server**, over 2 GB | Telegram cannot carry one file that big, so split it once (7-Zip "split to volumes", or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`). Then `/multi`, send all the `.001 .002 …` parts, `/done`: the bot joins them **on the fly into one file on any FTP/FTPS/SFTP server** — resumable inside any volume, no temp disk, gaps and duplicates detected. Alternative on SSH servers: upload the parts normally and run `/join file` (`--rm` deletes them afterwards; needs free space equal to the file size) |
+| **Telegram → server**, 2–4 GB | **sent directly, like any other file** — the sender needs Telegram Premium (that is a Telegram rule, not a bot one); the bot streams it to any FTP/FTPS/SFTP server with no volumes and no temp disk, and the queue note marks it |
+| **Telegram → server**, over 4 GB | Telegram cannot carry one file that big from anyone, so split it once (7-Zip "split to volumes", or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`). Then `/multi`, send all the `.001 .002 …` parts, `/done`: the bot joins them **on the fly into one file on any FTP/FTPS/SFTP server** — resumable inside any volume, no temp disk, gaps and duplicates detected. Alternative on SSH servers: upload the parts normally and run `/join file` (`--rm` deletes them afterwards; needs free space equal to the file size) |
 | **URL → server** | `/fetch <url>` — no size limit by default (`MAX_FETCH_MB` can cap it), resumable via HTTP Range |
 | **Server → Telegram** | `/get path` — one file up to `TG_MAX_MB` (default 1900 MB); anything bigger is sent as `.001 .002 …` volumes (`-v 500` picks the volume size in MB). Only one volume is staged on disk at a time, and volumes shrink to 85 % of the free disk. `/join` on an SSH server reassembles them again |
 
-Reading a 4 GB file sent by a Premium user has not been exercised here; the safe path is volumes.
+The direct 2–4 GB path uses the same windowed MTProto streaming as every other upload (64-bit offsets);
+it has not yet been exercised against a live Premium upload in production, so try one big file first.
 
 ## Speed profiles
 
@@ -256,6 +263,11 @@ over plain `ftp://`. Full policy and hardening checklist: [SECURITY.md](SECURITY
   Not exercised: MySQL/MariaDB, a real MongoDB/Atlas, the published Docker image, live Telegram production traffic.
 
 ## FAQ
+
+**Can I send a 3 GB file without splitting it?**
+Yes, if the **sender** has Telegram Premium — Telegram itself refuses bigger uploads from free accounts.
+Forward or upload the file; the bot streams it to the server directly (the queue message marks it as an over-
+2 GB transfer). Above 4 GB Telegram has no single-file path at all: split and use `/multi` + `/done`.
 
 **Does the bot need a public IP, domain or webhook?**
 No. It talks to Telegram over MTProto with outbound connections only. The HTTP health endpoint is optional

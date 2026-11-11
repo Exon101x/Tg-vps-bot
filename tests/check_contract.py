@@ -58,6 +58,12 @@ u = store.usage(BIG); ok(u["today"] == (1, 5_000_000_000) and u["week"] == (1, 5
 ok(store.get_job(99999) is None, "missing job -> None")
 ok(store.list_jobs(BIG + 1) == [], "jobs are per user")
 
+# --- direct 2-4 GB transfers (Premium files): sizes past every 32-bit boundary insert and round-trip
+for n, size in enumerate((2 ** 31, 2 ** 32, 4 * 1024 ** 3, 4 * 1024 ** 3 + 1)):
+    jn = store.add_job(BIG, "vps-ü", BIG, f"tg:{BIG}:{80 + n}", f"big{n}.bin", f"big{n}.bin", size)
+    ok(store.get_job(jn)["size"] == size, f"add_job stores size {size} exactly (BIGINT on every backend)")
+store.kv_set("ask:42", "1"); ok(store.kv_get("ask:42") == "1", "kv (per-user settings like /ask)")
+
 # --- audit
 for i in range(5): store.log(BIG, "vps-ü", f"cmd {i}"); time.sleep(0.01)
 ok(len(store.recent_log(BIG, 3)) == 3 and store.recent_log(BIG, 3)[0]["action"].startswith("cmd"), "audit log recent")

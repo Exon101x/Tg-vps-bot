@@ -53,7 +53,10 @@ Albums and bulk sends are fine. What happens under the hood:
 * no temp disk — bytes flow from Telegram into the server connection;
 * the job is queued persistently per server (restarts don't lose it);
 * failures retry with backoff (`MAX_RETRIES`), interrupted uploads resume from the server-side `.part` file;
-* live progress: speed, ETA, uploaded/total.
+* live progress: speed, ETA, uploaded/total;
+* **files up to 4 GB stream directly** — above 2 GB the *sender* needs Telegram Premium (a Telegram rule;
+  the bot downloads whatever Telegram accepted). Over 4 GB Telegram has no single-file path at all:
+  see [files over 2 GB](#files-over-2-gb).
 
 Optional caption routing:
 
@@ -63,6 +66,24 @@ Optional caption routing:
 ```
 
 Caption destinations go through the same sanitising as folder templates — no absolute paths, no `../`.
+
+### Choosing the server per file: `/ask`
+
+By default every file goes to the **active** server. Turn on ask mode and each file you send gets buttons
+under it — tap a server and the file is sent there (forward a file, tap, done — no `/use` needed):
+
+```
+/ask on      buttons under every file (folder template + "> destination" caption of the tapped server apply)
+/ask off     back to automatic (active server)
+/ask         show the current state
+```
+
+Notes: the picker needs at least two saved servers (with one there is nothing to choose); a pending choice
+expires after 30 minutes or when the bot restarts (just forward the file again); turn ask mode **off** before
+bulk sends so files queue without a tap each. The picker itself does not survive a restart because the
+files stay safely in your chat — forward them again.
+
+### Transfer commands
 
 | Command | What it does |
 |---|---|
@@ -142,10 +163,16 @@ Both log to `/audit`. `/cancel` bails out of an open password/key prompt or a `/
 
 ## Files over 2 GB
 
-Telegram caps a single file at 2 GB (4 GB for Premium senders; a bot cannot send more than 2 GB).
-Two directions, two mechanisms — both end-to-end resumable:
+Telegram caps a single file at 2 GB for free accounts and **4 GB for Premium accounts**. Because the bot
+talks MTProto (not the Bot API), it downloads whatever Telegram accepted — so the tiers are:
 
-### Telegram → server (big upload)
+| File size | What to do |
+|---|---|
+| up to 2 GB | just send/forward the file — it streams to the server directly |
+| 2–4 GB | same, **if the sender has Premium**: the queue message marks it "over 2 GB — streaming directly" |
+| over 4 GB | no single file that big can exist in Telegram; split once and use `/multi` + `/done` (or `/join` on SSH) |
+
+### Telegram → server (over 4 GB, or 2–4 GB without Premium)
 
 1. Split the file once on your computer: 7-Zip → "Split to volumes", or
    `split -b 1900M -d -a 3 --numeric-suffixes=1 bigfile bigfile.`

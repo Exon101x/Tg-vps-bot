@@ -64,6 +64,7 @@ DISK_ALERT = env_int("DISK_ALERT", 90, lo=1, hi=100)
 MEM_ALERT = env_int("MEM_ALERT", 90, lo=1, hi=100)
 MAX_FETCH = env_int("MAX_FETCH_MB", 0, lo=0) * 1024 * 1024  # 0 = no limit for /fetch downloads
 TG_MAX = env_int("TG_MAX_MB", 1900, lo=1) * 1024 * 1024  # largest single file /get sends; Telegram allows 2 GB for bots
+TG_IN_MAX = 4 * 1024 ** 3  # the biggest file Telegram itself can carry (Premium accounts upload up to 4 GB): 2-4 GB files stream directly, no volumes needed
 
 DEFAULT_PORTS = {"ftp": 21, "ftps": 21, "ssh": 22}
 NAME_RE = re.compile(r"[\w.-]{1,24}")
@@ -78,6 +79,8 @@ TERM = {}          # uid -> last activity (terminal mode)
 COLLECT = {}       # uid -> volumes being collected by /multi
 COLLECT_IDLE = 7200
 TERM_IDLE = 600
+PICK = {}          # uid -> {picker message id: (chat_id, msg_id, name, size, cap_dest, group, ts)} for /ask
+PICK_IDLE = 1800   # unanswered server choices fall out of memory after this long
 
 # Guard against fat-fingering. This is NOT a security boundary - the user already has a shell.
 DANGEROUS = re.compile(
@@ -116,17 +119,19 @@ Non-root users need passwordless sudo for service/docker/reboot actions.
 FILES (all servers)
 Send any file: it streams straight to the server (no temp disk), is queued per server,
 retried on failures and resumed from the partial file. Albums and bulk sends are fine.
+Files up to 4 GB stream directly (the sender needs Telegram Premium above 2 GB).
 Caption "> path/name.ext" (or "> dir/") sets the destination.
+/ask on|off - when on, every file you send gets buttons to pick the destination server
 /queue - jobs · /retry [id] · /stop <id|all> · /usage - upload totals
 /folder <template> - auto folders, e.g. {user}/{date} or {type}/{year}-{month}
 /ondup overwrite|skip|rename - what to do if the file already exists
 /pwd · /cd <dir> · /ls [dir] · /mkdir <dir> · /mv <from> <to> · /rm <path>
 /get <path> [-v MB] - send a server file to this chat; over 2 GB it is split into .001 .002 volumes
 /join <name> [--rm] - (ssh) reassemble name.001 name.002 ... on the server
-/multi [name] ... /done - collect the volumes of a file over 2 GB and upload them as ONE file to any server
+/multi [name] ... /done - collect the volumes of a file over 4 GB (or without Premium) and upload them as ONE file to any server
 /perf - detected CPU/RAM and the speed profile in use
 /fetch <url> [name] - the server downloads a URL (ssh) or the bot streams it (ftp); no size limit
-Files over 2 GB: split them first (7-Zip volumes, or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`),
+Files over 4 GB (or over 2 GB without Premium): split them first (7-Zip volumes, or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`),
 then /multi, send all the .001 .002 ... parts, and /done: one file lands on any FTP/FTPS/SFTP server."""
 
 
@@ -150,6 +155,28 @@ def media_group(m):
         if mime.startswith(prefix):
             return group
     return GROUP.get(kind, "files")
+
+
+def caption_dest(raw, name):
+    """Parse the "> destination" of a caption: an explicit path, or a folder that gets the file name appended.
+    Same segment-wise sanitising as the folder template: no ../, no absolute paths, no CRLF."""
+    raw = raw.strip()
+    if not raw:
+        return name
+    raw = re.sub(r"[\x00-\x1f]", "", raw.splitlines()[0])
+    wanted_dir = raw.rstrip("/").rstrip("\\") != raw or not raw.strip("/\\")
+    dest = clean_path(raw)
+    if not dest:
+        return name
+    return dest + "/" + name if wanted_dir else dest
+
+
+def size_verdict(size):
+    """None when a file of this size can be uploaded directly, otherwise the reason it can't."""
+    if size and size > TG_IN_MAX:
+        return (f"{human(size)} is past Telegram's absolute ceiling of 4 GB per file, so forwarding cannot carry it either. "
+                "Split it (7-Zip volumes, or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`) and use /multi + /done.")
+    return None
 
 
 def group_from_name(name):
@@ -220,6 +247,31 @@ async def need(uid, msg, ssh=False):
         await msg.reply(f"'{c['name']}' is an FTP server and this needs SSH. Add one with /add or switch with /servers.")
         return None
     return c
+
+
+def ask_mode(uid):
+    """Per-user setting: when on, every file sent to the bot gets buttons to pick the destination server."""
+    return store.kv_get(f"ask:{uid}") == "1"
+
+
+def pick_keyboard(servers):
+    rows = [[Btn(f"📤 {name}", callback_data=f"pick:{name}")] for name in servers]
+    rows.append([Btn("✖ Cancel", callback_data="pickc:1")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def queue_upload(uid, chat_id, msg_id, c, name, dest, size, status):
+    """The tail the direct path and the /ask picker share: create the job and hand it to the worker."""
+    jid = store.add_job(uid, c["name"], chat_id, f"tg:{chat_id}:{msg_id}", name, dest, size)
+    store.set_job(jid, status_id=status.id)
+    store.log(uid, c["name"], f"upload {dest}")
+    ahead = store.count_active(uid, c["name"])
+    note = "\n📦 over 2 GB — streaming directly (Premium upload)" if size > 2 * 1024 ** 3 else ""
+    try:
+        await status.edit_text(f"#{jid} ⏳ {name} → {c['name']}:{dest}" + (f"\n{ahead} ahead in the queue" if ahead else "") + note)
+    except Exception:
+        pass
+    engine.enqueue(jid)
 
 
 async def remote(c, fn):
@@ -514,6 +566,26 @@ async def use(_, m):
     name = arg_text(m)
     ok = store.set_active(m.from_user.id, name)
     await m.reply(f"▶️ Now using {name}" if ok else "No such server. See /servers.")
+
+
+@app.on_message(auth & filters.command("ask"))
+async def ask(_, m):
+    """Per-user toggle: when on, every file sent to the bot shows buttons to pick the destination server."""
+    uid, a = m.from_user.id, arg_text(m).strip().lower()
+    if a in ("on", "1", "yes", "true"):
+        store.kv_set(f"ask:{uid}", "1")
+        n = len(store.list_servers(uid))
+        if n < 2:
+            await m.reply(f"📤 Ask mode on, but you have {n or 'no'} server{'s' if n == 1 else ''} saved — the buttons appear once you add a second one with /add.")
+        else:
+            await m.reply("📤 Ask mode on: every file you send now gets buttons under it to choose the destination server. "
+                          'The folder template and the "> destination" caption of the server you pick still apply. /ask off to return to automatic.')
+    elif a in ("off", "0", "no", "false"):
+        store.kv_set(f"ask:{uid}", "")
+        await m.reply("▶️ Ask mode off: files go to the active server again (/servers to switch, /use to pick one).")
+    else:
+        await m.reply(f"Ask mode is {'on 📤' if ask_mode(uid) else 'off'}.\nUsage: /ask on|off — when on, every file you send shows "
+                      "buttons to pick which of your servers receives it. Tip: turn it off before bulk sends.")
 
 
 @app.on_message(auth & filters.command("del"))
@@ -962,24 +1034,28 @@ async def upload(_, m):
         return await collect_part(m, col)
     name = media_name(m)
     cap = (m.caption or "").strip()
-    if cap.startswith(">") and cap[1:].strip():  # explicit destination beats the folder template
-        raw = re.sub(r"[\x00-\x1f]", "", cap[1:].strip().splitlines()[0])
-        wanted_dir = raw.rstrip("/").rstrip("\\") != raw or not raw.strip("/\\")
-        dest = clean_path(raw)  # same segment-wise sanitising as the folder template: no ../, no absolute paths
-        if not dest:
-            dest = name
-        elif wanted_dir:
-            dest += "/" + name
-    else:
-        dest = render_dest(c, m.from_user, name, media_group(m))
+    cap_dest = caption_dest(cap[1:], name) if cap.startswith(">") and cap[1:].strip() else None
+    group = media_group(m)
     size = getattr(getattr(m, m.media.value), "file_size", 0) or 0
+    bad = size_verdict(size)
+    if bad:
+        return await m.reply(f"⚠️ {name} can't be uploaded directly.\n{bad}", quote=True)
+    if ask_mode(uid):  # /ask on: the user picks the destination server under each file
+        servers = [r["name"] for r in store.list_servers(uid)]
+        if len(servers) > 1:
+            mine = PICK.setdefault(uid, {})
+            now = time.time()
+            for mid in [mid for mid, info in mine.items() if now - info[-1] > PICK_IDLE]:
+                del mine[mid]
+            status = await m.reply(f"📤 {name} ({human(size)}) — send to which server?", quote=True,
+                                   reply_markup=pick_keyboard(servers))
+            mine[status.id] = (m.chat.id, m.id, name, size, cap_dest, group, now)
+            return
+        if servers:  # exactly one server saved: nothing to choose
+            c = store.get_server(uid, servers[0])
+    dest = cap_dest if cap_dest is not None else render_dest(c, m.from_user, name, group)
     status = await m.reply("⏳ Queued…", quote=True)
-    ahead = store.count_active(uid, c["name"])
-    jid = store.add_job(uid, c["name"], m.chat.id, f"tg:{m.chat.id}:{m.id}", name, dest, size)
-    store.set_job(jid, status_id=status.id)
-    store.log(uid, c["name"], f"upload {dest}")
-    await status.edit_text(f"#{jid} ⏳ {name} → {c['name']}:{dest}" + (f"\n{ahead} ahead in the queue" if ahead else ""))
-    engine.enqueue(jid)
+    await queue_upload(uid, m.chat.id, m.id, c, name, dest, size, status)
 
 
 async def collect_part(m, col):
@@ -1010,7 +1086,8 @@ async def multi_cmd(_, m):
     await m.reply(
         f"📚 Collecting volumes for {c['name']}{' as ' + name if name else ''}. Send the parts of the big file: "
         "name.001, name.002, ... are put in order automatically, any other files keep the order you sent them. "
-        "I join them on the fly into ONE file on the server, so files over 2 GB work on FTP, FTPS and SFTP alike. "
+        "I join them on the fly into ONE file on the server, so files of any size work on FTP, FTPS and SFTP alike "
+        "(for files up to 4 GB that Telegram accepts in one piece, just send the file directly instead). "
         "Then send /done. (/cancel to abort)")
 
 
@@ -1197,6 +1274,32 @@ async def on_callback(_, cq):
     if kind == "use":
         ok = store.set_active(uid, arg)
         return await cq.answer(f"Now using {arg}" if ok else "No such server", show_alert=not ok)
+    if kind in ("pick", "pickc"):  # /ask: choose the destination server for a file sent earlier
+        mine = PICK.get(uid) or {}
+        info = mine.pop(msg.id, None)
+        if not info:
+            return await cq.answer("This choice is no longer pending (it expired or the bot restarted) — send the file again.",
+                                    show_alert=True)
+        chat_id, msg_id, name, size, cap_dest, group, _ = info
+        if kind == "pickc":
+            await cq.answer("Cancelled")
+            try:
+                await msg.edit_text(f"✖ {name} cancelled")
+            except Exception:
+                pass
+            return
+        c = store.get_server(uid, arg)
+        if not c:
+            mine[msg.id] = info  # let the user pick another button instead of losing the file
+            return await cq.answer(f"Server '{arg}' no longer exists — pick another one.", show_alert=True)
+        await cq.answer(f"Sending to {c['name']}…")
+        try:
+            await msg.edit_reply_markup()
+        except Exception:
+            pass
+        dest = cap_dest if cap_dest is not None else render_dest(c, cq.from_user, name, group)
+        await queue_upload(uid, chat_id, msg_id, c, name, dest, size, msg)
+        return
     if kind in ("jr", "js"):
         await cq.answer()
         n = await (retry_jobs if kind == "jr" else stop_jobs)(uid, arg)
@@ -1254,10 +1357,10 @@ COMMANDS = [
     ("vps", "VPS dashboard"), ("stats", "CPU, RAM, disk, uptime"), ("sh", "Run a shell command"),
     ("term", "Terminal mode"), ("service", "Manage systemd services"), ("logs", "Service logs"),
     ("docker", "Manage containers"), ("ls", "List remote directory"), ("cd", "Change directory"),
-    ("multi", "Upload a file over 2 GB from volumes"), ("perf", "Speed profile"), ("get", "Send a server file to this chat"), ("join", "Join .001 .002 volumes on the server"), ("fetch", "Download a URL to the server"),
+    ("multi", "Upload a file over 4 GB from volumes"), ("perf", "Speed profile"), ("get", "Send a server file to this chat"), ("join", "Join .001 .002 volumes on the server"), ("fetch", "Download a URL to the server"),
     ("queue", "Upload queue"), ("retry", "Retry failed uploads"), ("folder", "Auto-folder template"),
     ("servers", "Saved servers"), ("add", "Add a server"), ("monitor", "Alerts on/off"),
-    ("audit", "Action log"), ("about", "Bot status"), ("help", "All commands"),
+    ("ask", "Pick the server per file"), ("audit", "Action log"), ("about", "Bot status"), ("help", "All commands"),
 ]
 
 

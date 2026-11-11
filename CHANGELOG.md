@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.4.0 — direct 2–4 GB uploads, per-file server picker
+
+* **Files up to 4 GB now upload directly.** Premium accounts can send up to 4 GB to Telegram, and because
+  the bot speaks MTProto (not the Bot API) it downloads those whole: forward or upload the file and it
+  streams to any FTP/FTPS/SFTP server like any other file — same parallel windows, queue, retries and
+  resume, no volumes and no temp disk. Files between 2 and 4 GB get a "streaming directly (Premium
+  upload)" note in the queue message. A defensive guard refuses anything past Telegram's absolute 4 GB
+  ceiling with split + `/multi` guidance instead of a confusing mid-transfer failure.
+* **New `/ask on|off`**: when on, every file you send gets buttons under it to pick the destination
+  server — forward a file, tap a server, done; no `/use` switching needed. The tapped server's folder
+  template and `"> destination"` caption handling apply as usual. Pending choices expire after 30 minutes
+  or on restart (the files stay in your chat, so just forward them again). With fewer than two servers
+  saved the buttons don't appear. `/ask off` (the default) keeps the previous automatic behavior.
+* The upload handler's caption parsing was extracted into `caption_dest()` and its queueing tail into
+  `queue_upload()` — identical semantics (regression-tested: folder vs explicit path, CRLF, traversal,
+  empty captions), now shared by the direct path and the picker.
+* Help text, the bot command menu, README, COMMANDS.md and the FAQ were updated for the 4 GB tiers
+  (direct ≤ 4 GB with Premium, volumes beyond) and the new `/ask` flow.
+* New `tests/check_bigfile.py` (22 checks): the 4 GiB ceiling and its refusal message, BIGINT job-size
+  round-trips across every 32-bit boundary (2^31, 2^32, 2^32+1, 4 GiB), ask-mode persistence, caption
+  semantics, picker expiry bookkeeping and the 64-byte callback-data limit. `tests/check_contract.py`
+  gained the same size round-trips so every storage backend (incl. PostgreSQL in CI) proves them.
+
 ## 1.3.2 — documentation overhaul
 
 * The README was rewritten and organised: table of contents, feature highlights, quick start (wizard and
