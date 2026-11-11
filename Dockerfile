@@ -1,11 +1,11 @@
 # Works on x86_64 and ARM (Raspberry Pi, Graviton, Apple silicon): tgcrypto is compiled in the build stage.
-FROM python:3.12-slim AS build
+FROM python:3.15-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 RUN useradd --create-home bot && mkdir -p /data /app && chown bot /data /app
 WORKDIR /app
 COPY --from=build /wheels /wheels
