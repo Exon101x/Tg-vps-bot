@@ -6,7 +6,7 @@ COPY requirements.txt .
 RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
 FROM python:3.12-slim
-RUN useradd --create-home bot && mkdir /data && chown bot /data /app
+RUN useradd --create-home bot && mkdir -p /data /app && chown bot /data /app
 WORKDIR /app
 COPY --from=build /wheels /wheels
 RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl && rm -rf /wheels
@@ -15,5 +15,6 @@ USER bot
 ENV PYTHONUNBUFFERED=1 \
     SESSION_DIR=/data \
     DATABASE_URL=sqlite:////data/bot.db
+HEALTHCHECK --interval=60s --timeout=10s --start-period=45s --retries=3 CMD ["python", "healthcheck.py"]
 VOLUME /data
 CMD ["python", "bot.py"]

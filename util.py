@@ -1,4 +1,5 @@
 """Small shared helpers."""
+import logging
 import os
 import re
 
@@ -23,6 +24,30 @@ def clean_name(s):
     """Safe single path segment: no directories, no odd characters, no leading dots."""
     s = os.path.basename(s.replace("\\", "/"))
     return re.sub(r"[^\w.\- ()\[\]]", "_", s).strip(". ")
+
+
+def clean_path(s):
+    """Safe multi-segment relative path (for caption destinations): every segment goes through
+    clean_name, so no absolute paths, drive letters, backslash tricks or ../ traversal survive.
+    Returns "" when nothing usable is left."""
+    segs = [p for p in (clean_name(x) for x in s.replace("\\", "/").split("/")) if p and p not in (".", "..")]
+    return "/".join(segs)
+
+
+def env_int(name, default=0, lo=None, hi=None):
+    """int(os.getenv(...)) that never crashes the bot over a typo in an optional variable."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+    except ValueError:
+        logging.warning("%s=%r is not an integer; using %s", name, raw, default)
+        return default
+    if (lo is not None and v < lo) or (hi is not None and v > hi):
+        logging.warning("%s=%r is outside [%s, %s]; using %s", name, raw, lo, hi, default)
+        return default
+    return v
 
 
 def eta(seconds):

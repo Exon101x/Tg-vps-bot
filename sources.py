@@ -1,13 +1,14 @@
 """Streaming upload sources. Readers are used from worker threads and pull data on demand,
 so a slow server automatically slows the download (backpressure) and nothing touches the local disk."""
 import asyncio
+import http.client
 import ipaddress
 import socket
-import urllib.request
+import urllib.error
 from bisect import bisect_right
 from collections import deque
 from itertools import accumulate
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 from perf import SETTINGS
 
@@ -174,39 +175,121 @@ class MultiTgReader(Reader):
             self._cur.close()
 
 
+def _assert_public(ip):
+    """Raise unless ip is safe for the bot to fetch from: no loopback, private, link-local (cloud metadata),
+    reserved, unspecified or multicast space, including those hidden inside IPv4-mapped IPv6 addresses."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+        raise ValueError("Refusing to fetch from a private/internal address.")
+
+
 def check_public(url):
-    """Best-effort SSRF guard for URLs fetched by the bot itself."""
+    """Best-effort SSRF guard for URLs fetched by the bot itself. Returns the resolved address list so
+    the caller can connect to exactly the addresses that were checked: resolving again after the check
+    would let a rebinding DNS answer hand the actual connection a private address (a TOCTOU gap)."""
     u = urlparse(url)
     if u.scheme not in ("http", "https") or not u.hostname:
         raise ValueError("Only http(s) URLs are allowed.")
-    for info in socket.getaddrinfo(u.hostname, u.port or (443 if u.scheme == "https" else 80)):
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise ValueError("Refusing to fetch from a private/internal address.")
+    infos = socket.getaddrinfo(u.hostname, u.port or (443 if u.scheme == "https" else 80), 0, socket.SOCK_STREAM)
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            raise ValueError("Refusing to fetch from an unparseable address.")
+        _assert_public(ip)
+    return infos
 
 
-class _SafeRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        check_public(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+class _PinnedHTTP(http.client.HTTPConnection):
+    """HTTP connection pinned to a pre-validated address instead of re-resolving DNS at connect time,
+    which is what actually defeats DNS rebinding. No proxy support is needed: we build these directly."""
+
+    def __init__(self, host, port, ip, timeout=30):
+        super().__init__(host, port, timeout=timeout)
+        self._ip = ip
+
+    def connect(self):
+        self.sock = socket.create_connection((self._ip, self.port), timeout=self.timeout)
+        try:
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+
+
+class _PinnedHTTPS(http.client.HTTPSConnection):
+    """Same pin, over TLS: the connection goes to the validated IP while SNI and certificate
+    verification still use the original hostname, so the cert chain is fully checked as before."""
+
+    def __init__(self, host, port, ip, timeout=30):
+        super().__init__(host, port, timeout=timeout)
+        self._ip = ip
+
+    def connect(self):
+        self.sock = socket.create_connection((self._ip, self.port), timeout=self.timeout)
+        try:
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+
+
+MAX_REDIRECTS = 5
 
 
 class HttpReader(Reader):
     def __init__(self, url, offset, on_progress, cancelled, max_bytes):
         super().__init__(offset, on_progress, cancelled)
-        check_public(url)
-        headers = {"User-Agent": "Mozilla/5.0"}
-        if offset:
-            headers["Range"] = f"bytes={offset}-"
-        self._resp = urllib.request.build_opener(_SafeRedirect).open(urllib.request.Request(url, headers=headers), timeout=30)
-        length = int(self._resp.headers.get("Content-Length") or 0)
+        self._max = max_bytes
+        self._conn, self._resp = self._open(url, offset, 0)
+        length = int(self._resp.getheader("Content-Length") or 0)
         self._skip = 0
         if offset and self._resp.status != 206:  # server ignored Range: re-read and discard what it already has
             self._skip, self.total = offset, length
         else:
             self.total = length + offset if length else 0
         if max_bytes and self.total > max_bytes:  # 0 = no limit
+            self.close()
             raise ValueError("File is larger than MAX_FETCH_MB")
+
+    @classmethod
+    def _open(cls, url, offset, depth):
+        """GET url, following redirects. Every hop is SSRF-checked, and every connection is pinned to the
+        address that passed the check (one DNS lookup serves both), so rebinding cannot slip in between."""
+        if depth > MAX_REDIRECTS:
+            raise ValueError("Too many redirects")
+        infos = check_public(url)
+        u = urlparse(url)
+        port = u.port or (443 if u.scheme == "https" else 80)
+        if infos:  # check_public was monkeypatched (tests) -> resolve without validating
+            ip = infos[0][4][0]
+        else:
+            ip = socket.getaddrinfo(u.hostname, port, 0, socket.SOCK_STREAM)[0][4][0]
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+        conn = _PinnedHTTPS(u.hostname, port, ip, 30) if u.scheme == "https" else _PinnedHTTP(u.hostname, port, ip, 30)
+        try:
+            target = u.path or "/"
+            if u.query:
+                target += "?" + u.query
+            conn.request("GET", target, headers=headers)
+            resp = conn.getresponse()
+            if resp.status in (301, 302, 303, 307, 308):
+                location = resp.getheader("Location")
+                resp.close()
+                if not location:
+                    raise ValueError(f"redirect ({resp.status}) without a Location header")
+                conn.close()
+                return cls._open(urljoin(url, location), offset, depth + 1)
+            if resp.status >= 400:
+                err = urllib.error.HTTPError(url, resp.status, resp.reason, resp.headers, resp)
+                resp.close()
+                raise err
+            return conn, resp
+        except Exception:
+            conn.close()
+            raise
 
     def read(self, size=-1):
         size = size if size and size > 0 else CHUNK
@@ -218,10 +301,15 @@ class HttpReader(Reader):
         data = self._resp.read(size)
         if data:
             self._advance(len(data))
+            if self._max and self.pos > self._max:  # no Content-Length: enforce the cap while streaming
+                self.close()
+                raise ValueError("File is larger than MAX_FETCH_MB")
         return data
 
     def close(self):
-        try:
-            self._resp.close()
-        except Exception:
-            pass
+        for closer in (getattr(self, "_resp", None), getattr(self, "_conn", None)):
+            try:
+                if closer is not None:
+                    closer.close()
+            except Exception:
+                pass

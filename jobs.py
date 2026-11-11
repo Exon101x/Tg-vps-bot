@@ -8,7 +8,6 @@ import asyncio
 import errno
 import ftplib
 import logging
-import os
 import posixpath
 import time
 import urllib.error
@@ -20,9 +19,9 @@ import store
 from perf import SETTINGS
 from remote import HostKeyChanged, Remote, RenameFailed
 from sources import Cancelled, HttpReader, MultiTgReader, SourceGone, TgReader
-from util import bar, eta, human
+from util import bar, env_int, eta, human
 
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
+MAX_RETRIES = env_int("MAX_RETRIES", 5, lo=1)
 PARALLEL = SETTINGS["per_server"]
 BACKOFF = (5, 15, 45, 120, 300)  # seconds to wait before attempt 2, 3, ...
 CANCEL = set()  # ids of running jobs the user asked to stop

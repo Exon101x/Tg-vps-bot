@@ -1,10 +1,12 @@
-pyrogram
-tgcrypto
-paramiko
-cryptography
-python-dotenv
+# Pinned on purpose: this is an application, not a library. Dependabot will propose bumps,
+# and CI (ruff + the full test matrix on Python 3.10/3.11/3.12) verifies each one.
+pyrogram==2.0.106
+tgcrypto==1.2.5
+paramiko==5.1.0
+cryptography==50.0.2
+python-dotenv==1.2.4
+SQLAlchemy==2.1.8
 # database drivers (only the one matching DATABASE_URL is used; delete the others to slim the install)
-SQLAlchemy>=2.0
-psycopg2-binary   # PostgreSQL
-pymysql           # MySQL / MariaDB
-pymongo           # MongoDB / Atlas
+psycopg2-binary==2.9.13   # PostgreSQL
+pymysql==1.2.4            # MySQL / MariaDB
+pymongo==4.19.0           # MongoDB / Atlas

@@ -4,6 +4,7 @@ runs on a free 512 MB instance and on a big server.
 PERFORMANCE=auto|light|balanced|turbo (default auto). Individual variables always win over the profile:
 TG_PARALLEL, TG_WINDOW_MB, SFTP_WINDOW_MB, FTP_BLOCK_KB, PARALLEL_PER_SERVER.
 """
+import logging
 import math
 import os
 
@@ -73,8 +74,13 @@ def settings(env=None, read=_read, cpu_count=None):
     while s["tg_parallel"] > 1 and s["tg_parallel"] * s["tg_window_mb"] * MiB > ram // 8:  # never let buffers eat the RAM
         s["tg_parallel"] -= 1
     for key, var in ENV_OVERRIDES.items():
-        if env.get(var):
-            s[key] = max(1, int(env[var]))
+        raw = env.get(var)
+        if not raw:
+            continue
+        try:
+            s[key] = max(1, int(raw))
+        except ValueError:  # a typo in TG_PARALLEL etc. must not crash the bot at import
+            logging.warning("%s=%r is not an integer; keeping %s=%s", var, raw, key, s[key])
     s.update(profile=name, cores=cores, ram=ram)
     return s
 
