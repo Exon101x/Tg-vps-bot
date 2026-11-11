@@ -282,4 +282,4 @@ and requires an external `DATABASE_URL`; details in [docs/DEPLOY.md](docs/DEPLOY
 
 ## License
 
-MIT — see [LICENSE](LICENSE) (put your name in the copyright line).
+MIT — see [LICENSE](LICENSE) (Exon101).
