@@ -1,10 +1,9 @@
 # vpsbot: Telegram bot for file transfer and VPS management
 
-[![CI](https://github.com/YOUR-USER/YOUR-REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/Exon101x/Tg-vps-bot/actions)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/YOUR-USER/YOUR-REPO)
+[![CI](https://github.com/Exon101x/Tg-vps-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Exon101x/Tg-vps-bot/actions)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Exon101x/Tg-vps-bot)
 
-Send files to your FTP / FTPS / SFTP servers straight from Telegram, and run your VPS from a chat. *(Replace
-`YOUR-USER/YOUR-REPO` in the badges after you push.)*
+Send files to your FTP / FTPS / SFTP servers straight from Telegram, and run your VPS from a chat.
 
 **File transfer**
 * Files stream from Telegram to the server with **no temp disk**, through a persistent **queue** with **retries and
