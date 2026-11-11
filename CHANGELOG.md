@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.3.2 — documentation overhaul
+
+* The README was rewritten and organised: table of contents, feature highlights, quick start (wizard and
+  manual), a commands-at-a-glance table, a configuration summary, the large-file guide (both directions),
+  speed profiles, a deployment matrix, development/CI notes, security summary, limits, and an FAQ.
+* New **`docs/COMMANDS.md`** — every command with syntax, arguments and examples, grouped by area
+  (servers, transfer, filesystem, queue, VPS admin, shell, files over 2 GB), including the `/add` target
+  formats and what each queue state icon means.
+* New **`docs/CONFIG.md`** — every environment variable with type, default, allowed range and tuning
+  notes, including previously undocumented ones (`MONGO_DB`, `BOT_DB`, `KEEP_ALIVE_INTERVAL`), plus the
+  performance-profile table with its override variables.
+* New **`docs/ARCHITECTURE.md`** — design goals, module map with dependency direction, the five main data
+  flows (upload, `/get`, `/multi` join, session sync/lock), the database schema, the security-model table
+  and the testing strategy.
+* `docs/DEPLOY.md` was reorganised with a table of contents, a fixed glued heading, a `docker run` example
+  for the CI-published GHCR image, a Cloud Run min-instances note, a pointer to keep the systemd unit's
+  hardening flags, and two new troubleshooting rows (changed host key, unhealthy deploys).
+* `SECURITY.md` was expanded: reporting guidance with what to include, the security-model table, a
+  deployment hardening checklist, an incident-response table (leaked key / token / database), and a scope
+  section stating that `ALLOWED_USERS` gates *who* and the server-side SSH user gates *what*.
+* `CONTRIBUTING.md` was expanded: dev environment, code-style rules (tolerant env parsing, security tests
+  as a must), testing structure with the real-FTP/SSH servers, the backend contract test, the
+  `uv pip compile` check for version-conditional pins, a PR checklist and release notes.
+
 ## 1.3.1 — bug fixes, CI repair, hardening
 * **CI fixed**: the docker job failed on every push and every dependabot PR because the Dockerfile ran
   `chown bot /data /app` before `/app` existed (`WORKDIR` came one line too late). `/app` is now created first,
