@@ -1,6 +1,6 @@
 -r requirements.txt
-pytest
-ruff
-pyftpdlib     # local FTP server for the upload-engine tests
-asyncssh      # local SSH/SFTP server for the shell/SFTP tests
-mongomock     # in-memory stand-in for MongoDB
+pytest==9.2.0
+ruff==0.17.4
+pyftpdlib==2.2.0      # local FTP server for the upload-engine tests
+asyncssh==2.24.1      # local SSH/SFTP server for the shell/SFTP tests
+mongomock==4.3.0      # in-memory stand-in for MongoDB
