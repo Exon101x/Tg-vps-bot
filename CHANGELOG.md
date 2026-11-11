@@ -23,6 +23,9 @@
   configurable with `HEALTH_BIND` (default `0.0.0.0` for PaaS; use `127.0.0.1` on a VPS).
 * `requirements*.txt` are fully pinned to the versions the CI matrix verified; the accidentally committed
   `.venv312/` was removed from the repository and `.gitignore` now covers `.venv*`.
+* Pinned `SQLAlchemy==2.1.8` / `pymongo==4.19.0` broke Python 3.10 installs (both require 3.11+). They are now
+  conditional pins: 3.11+ keeps them, 3.10 gets the last compatible `SQLAlchemy==2.0.57` / `pymongo==4.18.0`
+  (the same versions the unpinned requirements had been resolving to on 3.10 all along).
 * New regression suite `tests/check_security.py` (24 checks) covering all of the above.
 
 ## 1.3.0
