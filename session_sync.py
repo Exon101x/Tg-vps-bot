@@ -16,12 +16,13 @@ import time
 import uuid
 
 import store
+from util import env_int
 
 NAME = "vpsbot"
 DIR = os.getenv("SESSION_DIR", ".")
-INTERVAL = int(os.getenv("SESSION_SYNC_INTERVAL", "300"))
+INTERVAL = env_int("SESSION_SYNC_INTERVAL", 300, lo=10)  # a typo must not crash the bot at import (same rule as bot.py)
 PATH = os.path.join(DIR, NAME + ".session")
-LOCK_TTL = int(os.getenv("LOCK_TTL", "60"))  # a lock nobody refreshed for this long is considered abandoned
+LOCK_TTL = env_int("LOCK_TTL", 60, lo=5)  # a lock nobody refreshed for this long is considered abandoned
 HEARTBEAT = 15
 INSTANCE = uuid.uuid4().hex[:12]
 _last = [0.0]
@@ -58,8 +59,10 @@ def snapshot(force=False):
     os.close(fd)
     try:
         dst = sqlite3.connect(tmp)
-        src.backup(dst)  # safe while Pyrogram is using the file
-        dst.close()
+        try:
+            src.backup(dst)  # safe while Pyrogram is using the file
+        finally:
+            dst.close()
         with open(tmp, "rb") as f:
             data = f.read()
     finally:

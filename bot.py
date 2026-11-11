@@ -687,6 +687,13 @@ async def send_from_server(msg, uid, name, path, override=None, confirmed=False)
     base = clean_name(path) or "file"
     store.log(uid, name, f"get {path} ({len(plan)} volume{'s' if len(plan) > 1 else ''})")
     loop = asyncio.get_running_loop()
+
+    async def status_edit(text):
+        try:
+            await status.edit_text(text)
+        except Exception:  # the user deleted the progress message: not a reason to abort the remaining volumes
+            pass
+
     async with SEM:
         for i, off, length in plan:
             label = base if len(plan) == 1 else volume_name(base, i)
@@ -707,12 +714,15 @@ async def send_from_server(msg, uid, name, path, override=None, confirmed=False)
                     except Exception as e:
                         logging.exception("get failed")
                         if attempt == GET_ATTEMPTS or is_permanent(e):
-                            return await status.edit_text(f"{err(e)}\n{label}")
-                        await status.edit_text(f"⚠️ {label}: {e}\nretrying ({attempt + 1}/{GET_ATTEMPTS})")
+                            return await status_edit(f"{err(e)}\n{label}")
+                        await status_edit(f"⚠️ {label}: {e}\nretrying ({attempt + 1}/{GET_ATTEMPTS})")
                         await asyncio.sleep(5)
     if len(plan) == 1:
-        return await status.delete()
-    await status.edit_text(f"✅ Sent {len(plan)} volumes of {base} ({human(size)})")
+        try:
+            return await status.delete()
+        except Exception:
+            return
+    await status_edit(f"✅ Sent {len(plan)} volumes of {base} ({human(size)})")
     await msg.reply(f"To reassemble: /join {base} on an SSH server, or on your computer: Linux/macOS `cat {base}.0* > {base}`, "
                     f"Windows `copy /b {base}.001+{base}.002+… {base}`, or open {base}.001 in 7-Zip.")
 

@@ -26,6 +26,11 @@
 * Pinned `SQLAlchemy==2.1.8` / `pymongo==4.19.0` broke Python 3.10 installs (both require 3.11+). They are now
   conditional pins: 3.11+ keeps them, 3.10 gets the last compatible `SQLAlchemy==2.0.57` / `pymongo==4.18.0`
   (the same versions the unpinned requirements had been resolving to on 3.10 all along).
+* `session_sync.py`: `SESSION_SYNC_INTERVAL` / `LOCK_TTL` typos no longer crash the bot at import (same tolerant
+  `env_int` parsing as the other numeric variables), and a failed session snapshot can no longer leak the temporary
+  database connection it was copying to.
+* `bot.py` `/get`: deleting the progress message mid-transfer no longer aborts a multi-volume download — status edits
+  are best-effort, so remaining volumes are still sent.
 * New regression suite `tests/check_security.py` (24 checks) covering all of the above.
 
 ## 1.3.0
