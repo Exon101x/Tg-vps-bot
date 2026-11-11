@@ -1,0 +1,23 @@
+# Install:  sudo cp deploy/vpsbot.service /etc/systemd/system/ && sudo systemctl enable --now vpsbot
+# Assumes the code is in /opt/vpsbot with a virtualenv at /opt/vpsbot/venv and settings in /opt/vpsbot/.env
+[Unit]
+Description=Telegram VPS + file transfer bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vpsbot
+WorkingDirectory=/opt/vpsbot
+EnvironmentFile=/opt/vpsbot/.env
+ExecStart=/opt/vpsbot/venv/bin/python bot.py
+Restart=always
+RestartSec=5
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vpsbot
+
+[Install]
+WantedBy=multi-user.target

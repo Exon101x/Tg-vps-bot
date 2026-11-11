@@ -1,0 +1,14 @@
+# Tool configuration only; the bot is a plain set of modules run with `python bot.py`.
+[tool.ruff]
+line-length = 160
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501", "E402", "E701", "E702", "E731"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E401", "E741", "F841"]

@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest
+ruff
+pyftpdlib     # local FTP server for the upload-engine tests
+asyncssh      # local SSH/SFTP server for the shell/SFTP tests
+mongomock     # in-memory stand-in for MongoDB

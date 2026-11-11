@@ -1,0 +1,5 @@
+# Heroku container deploy:  heroku stack:set container && git push heroku main
+# (Heroku web dynos must bind $PORT; the bot's health endpoint does that immediately.)
+build:
+  docker:
+    web: Dockerfile
