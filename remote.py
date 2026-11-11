@@ -46,6 +46,14 @@ def load_pkey(text):
     raise ValueError("Unsupported or passphrase-protected key. Use an unencrypted ed25519/RSA/ECDSA private key.")
 
 
+def _ftp_path(p):
+    """FTP has no quoting or escaping: a path containing CR/LF would reach the control connection
+    as extra commands (a classic FTP command injection), so refuse such paths outright."""
+    if isinstance(p, str) and ("\r" in p or "\n" in p):
+        raise ValueError("FTP paths cannot contain line breaks")
+    return p
+
+
 class _TOFU(paramiko.MissingHostKeyPolicy):
     """Trust on first use: pin the host key on first connect, refuse the connection if it ever changes.
     Runs during key exchange, i.e. before any credentials are sent."""
@@ -165,7 +173,7 @@ class Remote:
             if rc:
                 raise RuntimeError(out.strip() or f"cannot cd to {path}")
             return out.strip()
-        self.cli.cwd(path)
+        self.cli.cwd(_ftp_path(path))
         return self.cli.pwd()
 
     def ls(self, path=""):
@@ -175,9 +183,9 @@ class Remote:
         else:
             try:
                 rows = [(n, f.get("type") == "dir", int(f.get("size", 0)))
-                        for n, f in self.cli.mlsd(path, facts=["type", "size"]) if f.get("type") in ("file", "dir")]
+                        for n, f in self.cli.mlsd(_ftp_path(path), facts=["type", "size"]) if f.get("type") in ("file", "dir")]
             except ftplib.error_perm:  # server has no MLSD
-                rows = [(n, False, 0) for n in (self.cli.nlst(path) if path else self.cli.nlst())]
+                rows = [(n, False, 0) for n in (self.cli.nlst(_ftp_path(path)) if path else self.cli.nlst())]
         return sorted(rows, key=lambda r: (not r[1], r[0].lower()))
 
     # ---- file operations
@@ -186,7 +194,7 @@ class Remote:
         try:
             if self.ssh:
                 return self._sftp().stat(path).st_size
-            return self.cli.size(path) or 0
+            return self.cli.size(_ftp_path(path)) or 0
         except ftplib.error_perm:
             return 0
         except IOError as e:
@@ -199,13 +207,28 @@ class Remote:
             if self.ssh:
                 self._sftp().stat(path)
                 return True
-            return self.cli.size(path) is not None
+            return self._ftp_exists(path)
         except ftplib.error_perm:
             return False
         except IOError as e:
             if e.errno == errno.ENOENT:
                 return False
             raise
+
+    def _ftp_exists(self, path):
+        """SIZE returns 550 both for a missing file and on servers that don't implement SIZE at all,
+        and 500/502 when the command is unknown. Believing it would make the skip/rename duplicate
+        policies silently degrade into overwrite, so double-check with a directory listing."""
+        path = _ftp_path(path)
+        try:
+            return self.cli.size(path) is not None
+        except ftplib.error_perm:
+            parent, base = posixpath.split(path)
+            try:
+                names = self.cli.nlst(parent or ".")
+            except ftplib.error_perm:
+                return False  # cannot list either: keep the old (lenient) behaviour
+            return any(n == base or n.endswith("/" + base) for n in names)
 
     def makedirs(self, path):
         """mkdir -p, relative to the current directory unless path is absolute."""
@@ -219,7 +242,7 @@ class Remote:
                     self._sftp().mkdir(cur)
             else:
                 try:
-                    self.cli.mkd(cur)
+                    self.cli.mkd(_ftp_path(cur))
                 except ftplib.error_perm:
                     pass  # already exists (or no permission - the upload will report it)
 
@@ -238,6 +261,8 @@ class Remote:
         """Stream into <dest>.part, verify the size, then rename to dest.
         make_reader(offset) must return an object with read(n), close() and .total.
         With resume=True an existing .part is continued from where it stopped."""
+        if not self.ssh:
+            _ftp_path(dest)
         part = dest + ".part"
         offset = self.size(part) if resume else 0
         reader = make_reader(offset)
@@ -267,7 +292,7 @@ class Remote:
             finally:
                 f.close()
         else:
-            self.cli.storbinary(f"{'APPE' if offset else 'STOR'} {part}", reader, FTP_BLOCK)
+            self.cli.storbinary(f"{'APPE' if offset else 'STOR'} {_ftp_path(part)}", reader, FTP_BLOCK)
 
     def _finalize(self, part, dest):
         try:
@@ -282,10 +307,10 @@ class Remote:
                     self._sftp().rename(part, dest)
             else:
                 try:
-                    self.cli.delete(dest)
+                    self.cli.delete(_ftp_path(dest))
                 except ftplib.error_perm:
                     pass
-                self.cli.rename(part, dest)
+                self.cli.rename(_ftp_path(part), _ftp_path(dest))
         except Exception as e:
             raise RenameFailed(f"uploaded, but the server refused to rename {part} to {dest}: {e}") from e
 
@@ -293,13 +318,13 @@ class Remote:
         if self.ssh:
             self._sftp().putfo(fileobj, dest)
         else:
-            self.cli.storbinary(f"STOR {dest}", fileobj, 64 * 1024)
+            self.cli.storbinary(f"STOR {_ftp_path(dest)}", fileobj, 64 * 1024)
 
     def get(self, path, fileobj):
         if self.ssh:
             self._sftp().getfo(path, fileobj)
         else:
-            self.cli.retrbinary(f"RETR {path}", fileobj.write, 64 * 1024)
+            self.cli.retrbinary(f"RETR {_ftp_path(path)}", fileobj.write, 64 * 1024)
 
     def read_range(self, path, offset, length, fileobj):
         """Copy `length` bytes starting at `offset` into fileobj (SFTP: seek + prefetch; FTP: REST)."""
@@ -315,7 +340,7 @@ class Remote:
                     fileobj.write(data)
                     remaining -= len(data)
         else:
-            conn = self.cli.transfercmd(f"RETR {path}", rest=offset or None)
+            conn = self.cli.transfercmd(f"RETR {_ftp_path(path)}", rest=offset or None)
             try:
                 while remaining:
                     data = conn.recv(min(FTP_BLOCK, remaining))
@@ -336,7 +361,7 @@ class Remote:
         if self.ssh:
             self._sftp().mkdir(path)
         else:
-            self.cli.mkd(path)
+            self.cli.mkd(_ftp_path(path))
 
     def remove(self, path):
         """Delete a file, or an empty directory."""
@@ -347,12 +372,15 @@ class Remote:
                 self._sftp().rmdir(path)
         else:
             try:
-                self.cli.delete(path)
+                self.cli.delete(_ftp_path(path))
             except ftplib.error_perm:
-                self.cli.rmd(path)
+                self.cli.rmd(_ftp_path(path))
 
     def rename(self, src, dst):
-        (self._sftp() if self.ssh else self.cli).rename(src, dst)
+        if self.ssh:
+            self._sftp().rename(src, dst)
+        else:
+            self.cli.rename(_ftp_path(src), _ftp_path(dst))
 
     # ---- shell (ssh only)
     def exec(self, cmd, timeout=60):
