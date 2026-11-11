@@ -37,21 +37,33 @@ from jobs import Engine, is_permanent
 from largefiles import choose_volume, join_script, order_volumes, plan_volumes, volume_name
 from perf import describe as describe_perf
 from remote import Counting, Remote, fingerprint, load_pkey
-from util import clean_name, human
+from util import clean_name, clean_path, env_int, human
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
-API_ID = int(os.environ["API_ID"])
+try:
+    API_ID = int(os.environ["API_ID"])
+except KeyError:
+    raise
+except ValueError:
+    raise SystemExit("API_ID must be the numeric api_id from my.telegram.org (got " + repr(os.environ["API_ID"]) + ")")
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-ALLOWED = {int(x) for x in os.getenv("ALLOWED_USERS", "").replace(" ", "").split(",") if x}
+ALLOWED = set()
+for _uid in os.getenv("ALLOWED_USERS", "").replace(" ", "").split(","):
+    if not _uid:
+        continue
+    try:
+        ALLOWED.add(int(_uid))
+    except ValueError:
+        logging.warning("Ignoring non-numeric ALLOWED_USERS entry %r", _uid)
 if not ALLOWED:
     raise SystemExit("Set ALLOWED_USERS. The bot stores credentials and can run commands on your servers, so it must not be public.")
-MONITOR_INTERVAL = int(os.getenv("MONITOR_INTERVAL", "300"))
-DISK_ALERT = int(os.getenv("DISK_ALERT", "90"))
-MEM_ALERT = int(os.getenv("MEM_ALERT", "90"))
-MAX_FETCH = int(os.getenv("MAX_FETCH_MB", "0")) * 1024 * 1024  # 0 = no limit for /fetch downloads
-TG_MAX = int(os.getenv("TG_MAX_MB", "1900")) * 1024 * 1024  # largest single file /get sends; Telegram allows 2 GB for bots
+MONITOR_INTERVAL = env_int("MONITOR_INTERVAL", 300, lo=30)
+DISK_ALERT = env_int("DISK_ALERT", 90, lo=1, hi=100)
+MEM_ALERT = env_int("MEM_ALERT", 90, lo=1, hi=100)
+MAX_FETCH = env_int("MAX_FETCH_MB", 0, lo=0) * 1024 * 1024  # 0 = no limit for /fetch downloads
+TG_MAX = env_int("TG_MAX_MB", 1900, lo=1) * 1024 * 1024  # largest single file /get sends; Telegram allows 2 GB for bots
 
 DEFAULT_PORTS = {"ftp": 21, "ftps": 21, "ssh": 22}
 NAME_RE = re.compile(r"[\w.-]{1,24}")
@@ -904,6 +916,9 @@ async def docker(_, m):
 # ---------------------------------------------------------------- uploads, text, buttons
 async def handle_key(m, uid):
     p = PENDING_AUTH[uid]
+    if time.time() - p["ts"] > 300:
+        PENDING_AUTH.pop(uid, None)
+        return await m.reply("That request expired. Run /add again.")
     if m.document.file_size > 20_000:
         return await m.reply("That doesn't look like a private key (file too large). Try again or /cancel.")
     data = await m.download(in_memory=True)
@@ -938,9 +953,13 @@ async def upload(_, m):
     name = media_name(m)
     cap = (m.caption or "").strip()
     if cap.startswith(">") and cap[1:].strip():  # explicit destination beats the folder template
-        dest = re.sub(r"[\x00-\x1f]", "", cap[1:].strip().splitlines()[0])
-        if dest.endswith("/"):
-            dest += name
+        raw = re.sub(r"[\x00-\x1f]", "", cap[1:].strip().splitlines()[0])
+        wanted_dir = raw.rstrip("/").rstrip("\\") != raw or not raw.strip("/\\")
+        dest = clean_path(raw)  # same segment-wise sanitising as the folder template: no ../, no absolute paths
+        if not dest:
+            dest = name
+        elif wanted_dir:
+            dest += "/" + name
     else:
         dest = render_dest(c, m.from_user, name, media_group(m))
     size = getattr(getattr(m, m.media.value), "file_size", 0) or 0
@@ -1196,10 +1215,12 @@ async def monitor_loop():
             servers_ = store.monitored()
         except Exception:
             continue
+        live = set()
         for c in servers_:
             if c["scheme"] != "ssh":
                 continue
             key = (c["uid"], c["name"])
+            live.add(key)
             try:
                 issues = stats_issues(parse_kv(await asyncio.wait_for(asyncio.to_thread(sample, c), 90)))
             except Exception as e:
@@ -1215,6 +1236,8 @@ async def monitor_loop():
                     await app.send_message(c["uid"], f"✅ {c['name']}: recovered ({', '.join(cleared)})")
             except Exception:
                 logging.exception("monitor notify failed")
+        for gone in [k for k in state if k not in live]:  # deleted servers / monitoring turned off
+            del state[gone]
 
 
 COMMANDS = [
@@ -1229,7 +1252,8 @@ COMMANDS = [
 
 
 async def health_server(port):
-    """Tiny HTTP endpoint so PaaS health checks (which need an open $PORT) stay green."""
+    """Tiny HTTP endpoint so PaaS health checks (which need an open $PORT) stay green.
+    PaaS platforms need 0.0.0.0; on your own VPS set HEALTH_BIND=127.0.0.1 so only localhost sees it."""
     async def handle(reader, writer):
         try:
             await asyncio.wait_for(reader.readline(), 5)
@@ -1242,7 +1266,8 @@ async def health_server(port):
         finally:
             writer.close()
 
-    return await asyncio.start_server(handle, "0.0.0.0", port)
+    bind = os.getenv("HEALTH_BIND") or "0.0.0.0"
+    return await asyncio.start_server(handle, bind, port)
 
 
 async def start_client():
@@ -1282,7 +1307,7 @@ def lock_lost():
 
 async def main():
     global SESSION_SOURCE
-    port = int(os.getenv("HEALTH_PORT") or os.getenv("PORT") or 0)
+    port = env_int("HEALTH_PORT", 0, lo=0, hi=65535) or env_int("PORT", 0, lo=0, hi=65535)
     health = await health_server(port) if port else None  # up first, so the platform's health check passes at once
     await asyncio.to_thread(session_sync.acquire_lock)  # waits while an old copy is still shutting down
     SESSION_SOURCE = session_sync.restore()  # after the lock, so the old copy's final snapshot is what we restore
@@ -1299,7 +1324,7 @@ async def main():
     if os.getenv("KEEP_ALIVE", "").lower() in ("1", "true", "yes"):
         url = os.getenv("KEEP_ALIVE_URL") or os.getenv("RENDER_EXTERNAL_URL")
         if url:
-            every = int(os.getenv("KEEP_ALIVE_INTERVAL", "600"))
+            every = env_int("KEEP_ALIVE_INTERVAL", 600, lo=1)
             tasks.append(asyncio.create_task(keep_alive(url, every)))
             logging.info("Keep-alive: pinging %s every %ss", url, every)
         else:

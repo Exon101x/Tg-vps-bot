@@ -1,10 +1,9 @@
 # vpsbot: Telegram bot for file transfer and VPS management
 
-[![CI](https://github.com/YOUR-USER/YOUR-REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/Exon101x/Tg-vps-bot/actions)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/YOUR-USER/YOUR-REPO)
+[![CI](https://github.com/Exon101x/Tg-vps-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Exon101x/Tg-vps-bot/actions)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Exon101x/Tg-vps-bot)
 
-Send files to your FTP / FTPS / SFTP servers straight from Telegram, and run your VPS from a chat. *(Replace
-`YOUR-USER/YOUR-REPO` in the badges after you push.)*
+Send files to your FTP / FTPS / SFTP servers straight from Telegram, and run your VPS from a chat.
 
 **File transfer**
 * Files stream from Telegram to the server with **no temp disk**, through a persistent **queue** with **retries and
@@ -71,7 +70,7 @@ Environment variables (a `.env` file works too; real variables win). Everything 
 | `PORT` / `HEALTH_PORT` | if set, the bot answers HTTP health checks (`GET /` → 200) on it |
 | `PERFORMANCE` | `auto` (default), `light`, `balanced` or `turbo`; `/perf` shows what was detected and chosen |
 | `TG_PARALLEL`, `TG_WINDOW_MB`, `SFTP_WINDOW_MB`, `FTP_BLOCK_KB`, `PARALLEL_PER_SERVER`, `TG_MAX_MB`, `MAX_FETCH_MB` | override single speed/limit values, see `.env.example` |
-| `KEEP_ALIVE=1` | ping the public URL every 10 min so free web services don't sleep (`KEEP_ALIVE_URL`, or Render's `RENDER_EXTERNAL_URL`) |
+| `KEEP_ALIVE=1` | send a best-effort ping every 10 min; whether it prevents sleep depends on the host (`KEEP_ALIVE_URL`, or Render's `RENDER_EXTERNAL_URL`) |
 | `SESSION_DIR`, `RESET_SESSION`, `LOCK_TTL`, `DISABLE_LOCK` | session and single-instance handling, see [docs/DEPLOY.md](docs/DEPLOY.md) |
 
 ### Databases
