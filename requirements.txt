@@ -4,7 +4,7 @@ paramiko
 cryptography
 python-dotenv
 # database drivers (only the one matching DATABASE_URL is used; delete the others to slim the install)
-SQLAlchemy>=2.0
+SQLAlchemy>=2.1.8
 psycopg2-binary   # PostgreSQL
 pymysql           # MySQL / MariaDB
 pymongo           # MongoDB / Atlas
