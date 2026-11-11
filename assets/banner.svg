@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="260" viewBox="0 0 880 260" role="img" aria-label="vpsbot banner">
+  <!-- background -->
+  <rect width="880" height="260" fill="#0B1220"/>
+  <rect width="880" height="3" fill="#2AABEE"/>
+  <!-- paper plane / send mark -->
+  <g transform="translate(440,62)">
+    <polygon points="-14,-18 20,0 -14,18 -6,0" fill="#2AABEE"/>
+  </g>
+  <!-- title -->
+  <text x="440" y="140" text-anchor="middle" fill="#F8FAFC"
+        font-family="'Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif"
+        font-size="54" font-weight="700" letter-spacing="2">vpsbot</text>
+  <!-- accent underline -->
+  <rect x="416" y="156" width="48" height="4" rx="2" fill="#2AABEE"/>
+  <!-- tagline -->
+  <text x="440" y="192" text-anchor="middle" fill="#94A3B8"
+        font-family="'Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif"
+        font-size="19">Move files between Telegram and your servers &#8212; manage the VPS from the same chat</text>
+  <!-- protocol chips -->
+  <g font-family="'Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif"
+     font-size="13" font-weight="600" letter-spacing="1.5" text-anchor="middle">
+    <rect x="303" y="212" width="56" height="28" rx="14" fill="#13203A" stroke="#2AABEE" stroke-opacity="0.55"/>
+    <text x="331" y="231" fill="#7DD3FC">FTP</text>
+    <rect x="371" y="212" width="64" height="28" rx="14" fill="#13203A" stroke="#2AABEE" stroke-opacity="0.55"/>
+    <text x="403" y="231" fill="#7DD3FC">FTPS</text>
+    <rect x="447" y="212" width="64" height="28" rx="14" fill="#13203A" stroke="#2AABEE" stroke-opacity="0.55"/>
+    <text x="479" y="231" fill="#7DD3FC">SFTP</text>
+    <rect x="523" y="212" width="54" height="28" rx="14" fill="#13203A" stroke="#2AABEE" stroke-opacity="0.55"/>
+    <text x="550" y="231" fill="#7DD3FC">SSH</text>
+  </g>
+</svg>

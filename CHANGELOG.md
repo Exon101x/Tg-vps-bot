@@ -16,6 +16,11 @@
 * The upload handler's caption parsing was extracted into `caption_dest()` and its queueing tail into
   `queue_upload()` — identical semantics (regression-tested: folder vs explicit path, CRLF, traversal,
   empty captions), now shared by the direct path and the picker.
+* The README was redesigned: a banner and badge header, a features-at-a-glance matrix, GitHub
+  callout notes (tip / note / important / warning), an optional-variables table grouped by area,
+  the repository layout folded into an expandable section, and a tightened table of contents.
+  Adds `assets/banner.svg`. Facts re-checked against the code (bot.py is now ~1450 lines; the
+  suite is 12 check scripts with 24 security + 22 big-file checks).
 * Help text, the bot command menu, README, COMMANDS.md and the FAQ were updated for the 4 GB tiers
   (direct ≤ 4 GB with Premium, volumes beyond) and the new `/ask` flow.
 * New `tests/check_bigfile.py` (22 checks): the 4 GiB ceiling and its refusal message, BIGINT job-size

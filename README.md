@@ -1,74 +1,69 @@
-# vpsbot — Telegram bot for file transfer and VPS management
+<div align="center">
 
-[![CI](https://github.com/Exon101x/Tg-vps-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Exon101x/Tg-vps-bot/actions)
+<img src="assets/banner.svg" alt="vpsbot — move files between Telegram and your servers" width="100%">
+
+# vpsbot
+
+**Streaming file transfer with a persistent, resumable queue — plus a full SSH toolbox for your VPSes.**
+
+One process, no temp disk for uploads, and it runs anywhere: Docker, systemd, Render,
+Heroku or any VPS with Python 3.10+.
+
+[![CI](https://github.com/Exon101x/Tg-vps-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Exon101x/Tg-vps-bot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Exon101x/Tg-vps-bot)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-3776AB?logo=python&logoColor=white)](https://www.python.org)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230?logo=ruff&logoColor=white)](https://docs.astral.sh/ruff/)
+[![Image](https://img.shields.io/badge/image-ghcr.io%2Fexon101x%2Ftg--vps--bot-2496ED?logo=docker&logoColor=white)](https://github.com/Exon101x/Tg-vps-bot/pkgs/container/tg-vps-bot)
 
-Send files between Telegram and your **FTP / FTPS / SSH (SFTP)** servers, and manage your VPSes from a chat.
-One process, no temp disk for uploads, a persistent resumable queue, and it runs anywhere — Docker, systemd,
-Render, Heroku or any VPS with Python 3.10+.
+[![Stars](https://img.shields.io/github/stars/Exon101x/Tg-vps-bot?style=social)](https://github.com/Exon101x/Tg-vps-bot/stargazers)
+[![Forks](https://img.shields.io/github/forks/Exon101x/Tg-vps-bot?style=social)](https://github.com/Exon101x/Tg-vps-bot/forks)
+[![Issues](https://img.shields.io/github/issues/Exon101x/Tg-vps-bot?style=social)](https://github.com/Exon101x/Tg-vps-bot/issues)
+[![Last commit](https://img.shields.io/github/last-commit/Exon101x/Tg-vps-bot)](https://github.com/Exon101x/Tg-vps-bot/commits/main)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-| Documentation | What is in it |
-|---|---|
-| **[docs/COMMANDS.md](docs/COMMANDS.md)** | every command, argument and example |
-| **[docs/CONFIG.md](docs/CONFIG.md)** | every environment variable, default and tuning note |
-| **[docs/DEPLOY.md](docs/DEPLOY.md)** | hosting guide: Render, Docker, systemd, Heroku, PaaS, troubleshooting |
-| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | how the code works: modules, data flows, database schema, security model |
-| [SECURITY.md](SECURITY.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CHANGELOG.md](CHANGELOG.md) | policy, contributing, releases |
+[Commands](docs/COMMANDS.md) · [Configuration](docs/CONFIG.md) · [Deployment](docs/DEPLOY.md) ·
+[Architecture](docs/ARCHITECTURE.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) ·
+[Changelog](CHANGELOG.md)
 
-## Table of contents
+</div>
 
-1. [Highlights](#highlights)
+---
+
+## Contents
+
+1. [Features at a glance](#features-at-a-glance)
 2. [Quick start](#quick-start)
 3. [Commands at a glance](#commands-at-a-glance)
-4. [Configuration](#configuration)
-5. [Databases](#databases)
-6. [Moving large files (over 2 GB)](#moving-large-files-over-2-gb)
+4. [Big files: 2 GB, 4 GB and beyond](#big-files-2-gb-4-gb-and-beyond)
+5. [Configuration](#configuration)
+6. [Databases](#databases)
 7. [Speed profiles](#speed-profiles)
 8. [Deployment](#deployment)
-9. [Repository layout](#repository-layout)
+9. [Security](#security)
 10. [Development and CI](#development-and-ci)
-11. [Security](#security)
-12. [Limits and testing status](#limits-and-testing-status)
-13. [FAQ](#faq)
+11. [Repository layout](#repository-layout)
+12. [FAQ](#faq)
+13. [Limits and testing status](#limits-and-testing-status)
 14. [License](#license)
 
-## Highlights
+## Features at a glance
 
-**File transfer — Telegram ⇄ your servers**
-
-* Files stream from Telegram **straight to the server** — no temp disk, no double copy, no disk-space surprises.
-* A **persistent queue** per server survives restarts: jobs are retried with backoff, and interrupted uploads
-  **resume from the partial file** (`.part`). Flaky servers and redeploys are fine.
-* **Parallel windowed downloads** from Telegram (up to 16 windows × 16 MB on big hosts), with live speed and ETA.
-* **Files bigger than Telegram's 2 GB limit travel in both directions:**
-  * *to* a server: **up to 4 GB, just send the file** — Premium users can upload up to 4 GB to Telegram, and
-    the bot streams those straight to any FTP/FTPS/SFTP server (no volumes, no temp disk). Beyond 4 GB (or
-    without Premium), split once (7-Zip volumes or `split`), then `/multi` → send all parts → `/done` — the bot
-    joins them **on the fly** into one file on any server (resumable, still no temp disk);
-  * *from* a server: `/get` splits automatically into `.001 .002 …` volumes, staged one at a time and
-    shrunk to the free disk.
-* `/ask on` puts a server picker under every file you send: forward or upload a file, tap the destination
-  server, and the bot sends it there — no need to switch the active server first.
-* `/fetch <url>` pulls any HTTP(S) download to the server (no size limit, resumable, SSRF-guarded).
-* Per-user folders with templates (`{user}/{date}`, `{type}/{year}-{month}`), duplicate policies
-  (`overwrite` / `skip` / `rename`), several saved servers, remote file manager (`/ls /cd /mkdir /mv /rm`).
-
-**VPS management over SSH**
-
-* Dashboard with inline buttons: stats, processes, docker, ports, logins, updates, disk, firewall, failed services.
-* `/sh <command>` (working directory is remembered) and a full `/term` terminal mode (10-minute idle timeout).
-* systemd service control, journal logs, apt upgrades, reboot with confirmation, monitoring alerts
-  (down / disk full / memory pressure), a full `/audit` trail, and SSH host-key pinning.
-
-**Runs anywhere**
-
-* SQLite (default), PostgreSQL, MySQL/MariaDB or MongoDB — pick with one `DATABASE_URL`.
-* Deploy targets: `docker compose`, plain Docker (image also published to GHCR), systemd, Render Blueprint,
-  Heroku, Railway, Fly.io, Koyeb and friends. The `deploy.py` wizard sets any of them up.
-* Health endpoint for platform checks, session snapshots in the database (survive wiped disks),
-  single-instance lock for zero-downtime deploys.
+| Capability | What you get |
+|---|---|
+| **Direct streaming** | files go Telegram → server with **no temp disk** — parallel windowed downloads, live speed and ETA |
+| **Persistent queue** | survives restarts, retries with backoff, resumes from the server-side `.part` file |
+| **Files up to 4 GB** | sent directly like any other file (Premium sender) — no volumes, no splitting |
+| **Files beyond 4 GB** | `/multi` + `/done` joins split volumes **on the fly** into one file on any server |
+| **Per-file server picker** | `/ask on` — forward or upload a file, tap the destination server, done |
+| **URL downloads** | `/fetch <url>` pulls HTTP(S) straight to the server — resumable, SSRF-guarded |
+| **Server → Telegram** | `/get` auto-splits into `.001 .002 …` volumes when needed, staging one at a time |
+| **Remote file manager** | `/pwd` `/cd` `/ls` `/mkdir` `/mv` `/rm` |
+| **Folders & duplicates** | per-user folder templates (`{user}/{date}`, `{type}/{year}-{month}`), `overwrite` / `skip` / `rename` policies |
+| **VPS dashboard** | `/vps` with inline buttons: stats, processes, docker, ports, logins, updates, disk, firewall, failed services |
+| **Shell access** | `/sh <command>` (working directory remembered) and a full `/term` terminal mode |
+| **Monitoring & audit** | down / disk-full / memory-pressure alerts, a full `/audit` trail, SSH host-key pinning |
+| **Databases** | SQLite (default) · PostgreSQL · MySQL/MariaDB · MongoDB — pick with one `DATABASE_URL` |
+| **Runs anywhere** | Docker, systemd, Render, Heroku, Railway, Fly.io, Koyeb — health endpoint, DB-backed session snapshots, single-instance lock |
 
 ## Quick start
 
@@ -80,19 +75,19 @@ python deploy.py
 ```
 
 The wizard needs nothing installed (pure standard library), asks a few questions, validates every value,
-generates the `SECRET_KEY`, can start a bundled PostgreSQL or MongoDB, writes a mode-600 `.env` (with backup)
-and prepares Docker / systemd / Render / another PaaS / a local venv. It never replaces an existing
-`SECRET_KEY` and never runs anything without confirmation.
+generates the `SECRET_KEY`, can start a bundled PostgreSQL or MongoDB, writes a mode-600 `.env` (with
+backup) and prepares Docker / systemd / Render / another PaaS / a local venv. It never replaces an
+existing `SECRET_KEY` and never runs anything without confirmation.
 
-Non-interactive / scripted:
-
-```bash
-python deploy.py --yes --target docker --db postgres \
-  --api-id 12345 --api-hash 0123456789abcdef --bot-token 123:ABC \
-  --allowed-users 123456789 --run
-
-python deploy.py --check --verify   # validate an existing .env, check the token with Telegram, test the DB
-```
+> [!TIP]
+> Scripted / non-interactive:
+> ```bash
+> python deploy.py --yes --target docker --db postgres \
+>   --api-id 12345 --api-hash 0123456789abcdef --bot-token 123:ABC \
+>   --allowed-users 123456789 --run
+>
+> python deploy.py --check --verify   # validate .env, check the token with Telegram, test the DB
+> ```
 
 ### Option B — manual
 
@@ -107,8 +102,7 @@ python bot.py
 1. `/add vps1 ssh://root@203.0.113.5` — save a server (it becomes active; the bot asks for the password
    or an SSH key file, and pins the host key on first connect).
 2. Send any file — it streams to the server's upload folder. A caption `> backups/` sets the destination.
-3. `/help` — the full command list, always available in chat.
-4. `/vps` — the management dashboard (SSH servers).
+3. `/vps` — the management dashboard. `/help` — the full command list, always available in chat.
 
 ## Commands at a glance
 
@@ -125,10 +119,30 @@ Full syntax, arguments and examples: **[docs/COMMANDS.md](docs/COMMANDS.md)**.
 | Folders & duplicates | `/folder <template>` · `/ondup <policy>` · `/ask on|off` (server picker per file) |
 | Misc | `/start` `/help` `/cancel` `/perf` |
 
+## Big files: 2 GB, 4 GB and beyond
+
+Telegram's documented limit is 2 GB per file; **Premium accounts can upload up to 4 GB**, and the bot
+(MTProto, not the Bot API) downloads those whole — so 2–4 GB files transfer directly. Above 4 GB nothing
+can carry one file in Telegram, hence the volume workflows.
+
+| Direction | What happens |
+|---|---|
+| **Telegram → server**, up to 2 GB | streamed in parallel windows, queued, retried, resumed from the partial file |
+| **Telegram → server**, 2–4 GB | **sent directly, like any other file** — the sender needs Telegram Premium (a Telegram rule, not a bot one); the bot streams it to any FTP/FTPS/SFTP server with no volumes and no temp disk, and the queue note marks it |
+| **Telegram → server**, over 4 GB | split it once (7-Zip volumes, or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`), then `/multi`, send all the `.001 .002 …` parts, `/done` — the bot joins them **on the fly into one file on any server**, resumable inside any volume, gaps and duplicates detected. Alternative on SSH servers: upload the parts normally and `/join file` (`--rm` deletes them afterwards; needs free space equal to the file size) |
+| **URL → server** | `/fetch <url>` — no size limit by default (`MAX_FETCH_MB` can cap it), resumable via HTTP Range |
+| **Server → Telegram** | `/get path` — one file up to `TG_MAX_MB` (default 1900 MB); anything bigger is sent as `.001 .002 …` volumes (`-v 500` picks the size in MB). One volume is staged on disk at a time, and volumes shrink to 85 % of the free disk. `/join` on an SSH server reassembles them |
+
+> [!IMPORTANT]
+> The direct 2–4 GB path uses the same windowed MTProto streaming as every other upload (64-bit
+> offsets) but has not yet been exercised against a live Premium upload in production — try one big
+> file first.
+
 ## Configuration
 
-Everything is an environment variable; a `.env` file works too (real variables win). The complete annotated
-list with types, defaults and examples is **[docs/CONFIG.md](docs/CONFIG.md)**; `.env.example` is the template.
+Everything is an environment variable; a `.env` file works too (real variables win). The complete
+annotated list with types, defaults and examples is **[docs/CONFIG.md](docs/CONFIG.md)**; `.env.example`
+is the template.
 
 ### Required
 
@@ -139,14 +153,21 @@ list with types, defaults and examples is **[docs/CONFIG.md](docs/CONFIG.md)**; 
 | `SECRET_KEY` | encrypts saved passwords/keys: a Fernet key or any random string of 16+ characters — **back it up**, losing it makes saved servers unreadable |
 | `ALLOWED_USERS` | comma-separated Telegram user ids; the bot refuses to start without it |
 
-### The rest, in one breath
+### Optional, by area
 
-`DATABASE_URL` (default `sqlite:///bot.db`), `PORT` / `HEALTH_PORT` / `HEALTH_BIND` (health endpoint),
-`PERFORMANCE` (`auto` by default), `TG_PARALLEL`, `TG_WINDOW_MB`, `SFTP_WINDOW_MB`, `FTP_BLOCK_KB`,
-`PARALLEL_PER_SERVER` (per-value tuning), `TG_MAX_MB`, `MAX_FETCH_MB`, `MAX_RETRIES`, `MONITOR_INTERVAL`,
-`DISK_ALERT`, `MEM_ALERT`, `KEEP_ALIVE` / `KEEP_ALIVE_URL`, `SESSION_DIR`, `SESSION_SYNC_INTERVAL`,
-`RESET_SESSION`, `LOCK_TTL`, `DISABLE_LOCK`, `DB_CONNECT_RETRIES`, `LOG_LEVEL`.
-A typo in a numeric variable logs a warning and uses the default — the bot never crashes at import over config.
+| Area | Variables |
+|---|---|
+| Core | `DATABASE_URL` (default `sqlite:///bot.db`) · `PERFORMANCE` (`auto` by default) · `LOG_LEVEL` |
+| Health endpoint | `PORT` · `HEALTH_PORT` · `HEALTH_BIND` |
+| Transfer tuning | `TG_PARALLEL` · `TG_WINDOW_MB` · `SFTP_WINDOW_MB` · `FTP_BLOCK_KB` · `PARALLEL_PER_SERVER` |
+| Size limits | `TG_MAX_MB` · `MAX_FETCH_MB` · `MAX_RETRIES` |
+| Monitoring | `MONITOR_INTERVAL` · `DISK_ALERT` · `MEM_ALERT` |
+| Session & lock | `KEEP_ALIVE` · `KEEP_ALIVE_URL` · `SESSION_DIR` · `SESSION_SYNC_INTERVAL` · `RESET_SESSION` · `LOCK_TTL` · `DISABLE_LOCK` |
+| Robustness | `DB_CONNECT_RETRIES` |
+
+> [!NOTE]
+> A typo in a numeric variable logs a warning and uses the default — the bot never crashes at import
+> over config.
 
 ## Databases
 
@@ -163,27 +184,10 @@ A typo in a numeric variable logs a warning and uses the default — the bot nev
   (add `--force` to replace a non-empty target). Keep the same `SECRET_KEY`.
 * Queries are synchronous — keep the database in the same region as the bot.
 
-## Moving large files (over 2 GB)
-
-Telegram's documented limit is 2 GB per file; **Premium accounts can upload up to 4 GB**, and the bot
-(MTProto, not the Bot API) downloads those whole — so 2–4 GB files transfer directly. Above 4 GB nothing
-can carry one file in Telegram, hence the volume workflows.
-
-| Direction | What happens |
-|---|---|
-| **Telegram → server**, up to 2 GB | streamed in parallel windows, queued, retried, resumed from the partial file |
-| **Telegram → server**, 2–4 GB | **sent directly, like any other file** — the sender needs Telegram Premium (that is a Telegram rule, not a bot one); the bot streams it to any FTP/FTPS/SFTP server with no volumes and no temp disk, and the queue note marks it |
-| **Telegram → server**, over 4 GB | Telegram cannot carry one file that big from anyone, so split it once (7-Zip "split to volumes", or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`). Then `/multi`, send all the `.001 .002 …` parts, `/done`: the bot joins them **on the fly into one file on any FTP/FTPS/SFTP server** — resumable inside any volume, no temp disk, gaps and duplicates detected. Alternative on SSH servers: upload the parts normally and run `/join file` (`--rm` deletes them afterwards; needs free space equal to the file size) |
-| **URL → server** | `/fetch <url>` — no size limit by default (`MAX_FETCH_MB` can cap it), resumable via HTTP Range |
-| **Server → Telegram** | `/get path` — one file up to `TG_MAX_MB` (default 1900 MB); anything bigger is sent as `.001 .002 …` volumes (`-v 500` picks the volume size in MB). Only one volume is staged on disk at a time, and volumes shrink to 85 % of the free disk. `/join` on an SSH server reassembles them again |
-
-The direct 2–4 GB path uses the same windowed MTProto streaming as every other upload (64-bit offsets);
-it has not yet been exercised against a live Premium upload in production, so try one big file first.
-
 ## Speed profiles
 
-The bot reads the CPU cores and RAM it is allowed to use (container limits included) and picks a profile —
-`/perf` shows what was detected and chosen; `PERFORMANCE` forces one.
+The bot reads the CPU cores and RAM it is allowed to use (container limits included) and picks a
+profile — `/perf` shows what was detected and chosen; `PERFORMANCE` forces one.
 
 | Profile | Chosen when | Telegram windows | SFTP window | FTP block | Uploads per server |
 |---|---|---|---|---|---|
@@ -191,44 +195,36 @@ The bot reads the CPU cores and RAM it is allowed to use (container limits inclu
 | `balanced` | in between | 8 × 8 MB | 8 MB | 256 KB | 1 |
 | `turbo` | 4+ cores and 3+ GB RAM | 16 × 16 MB | 32 MB | 1 MB | 2 |
 
-Buffers never exceed 1/8 of the RAM the process may use. The real transfer speed is still limited by the
-network between Telegram, the bot's host and your server; a faster profile helps most on high-latency links
-and big files.
+Buffers never exceed 1/8 of the RAM the process may use. The real transfer speed is still limited by
+the network between Telegram, the bot's host and your server; a faster profile helps most on
+high-latency links and big files.
 
 ## Deployment
 
 | Where | How |
 |---|---|
-| Any of them | `python deploy.py` — interactive wizard, or flags for scripts (see [docs/DEPLOY.md](docs/DEPLOY.md)) |
+| Any of them | `python deploy.py` — interactive wizard, or flags for scripts ([docs/DEPLOY.md](docs/DEPLOY.md)) |
 | **Render** | push to GitHub → New → Blueprint (uses `render.yaml`); free-plan caveats in [docs/DEPLOY.md](docs/DEPLOY.md#render) |
 | **Docker / any VPS** | `docker compose up -d --build` — or pull the CI-published image `ghcr.io/exon101x/tg-vps-bot:main` |
 | **systemd** | `deploy/vpsbot.service` (hardened unit, install commands in [docs/DEPLOY.md](docs/DEPLOY.md#systemd-bare-vps-raspberry-pi)) |
 | **Heroku, Railway, Fly.io, Koyeb, Cloud Run, …** | run the `Dockerfile`, set the env vars — per-platform notes in [docs/DEPLOY.md](docs/DEPLOY.md#other-container-platforms) |
 
-Three rules for every host: **one running copy per bot token** (enforced by a database lock),
-**an external database** where the disk is wiped on restart, and **a backed-up `SECRET_KEY`**.
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Exon101x/Tg-vps-bot)
 
-## Repository layout
+> [!IMPORTANT]
+> Three rules for every host: **one running copy per bot token** (enforced by a database lock),
+> **an external database** where the disk is wiped on restart, and **a backed-up `SECRET_KEY`**.
 
-```
-bot.py            Telegram handlers, start-up, health endpoint            (~1350 lines)
-jobs.py           persistent upload queue: retries, resume, stop/retry, speed/ETA
-sources.py        streaming sources: parallel Telegram windows, HTTP with Range (SSRF-guarded)
-largefiles.py     volume planning for /get, volume ordering for /multi, the /join script
-remote.py         FTP / FTPS / SSH + SFTP client, host-key pinning, path sanitising
-store.py          domain API + Fernet encryption
-backends.py       SQLite / PostgreSQL / MySQL / MongoDB behind one interface
-session_sync.py   Telegram session snapshots + single-instance lock
-perf.py           host detection and speed profiles
-deploy.py         deployment setup wizard (stdlib only)
-migrate.py        copy data between databases
-healthcheck.py    Docker HEALTHCHECK helper
-Dockerfile, docker-compose.yml, render.yaml, heroku.yml, Procfile, deploy/vpsbot.service
-tests/            pytest suite: 12 scripts (local FTP + SSH servers, in-memory databases, 24 security checks)
-docs/             COMMANDS.md, CONFIG.md, DEPLOY.md, ARCHITECTURE.md
-```
+## Security
 
-How the pieces fit together: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+> [!WARNING]
+> Only `ALLOWED_USERS` can use the bot, and each of them can run commands on every server they add —
+> treat those ids like root access.
+
+The design: SSH host keys pinned on first use, destructive commands ask for confirmation, every action
+lands in `/audit`, credentials are encrypted at rest, URL fetches are SSRF-guarded (host resolved once,
+connection pinned to the checked address), FTP paths are command-injection-safe. Prefer `ssh://`/`ftps://`
+over plain `ftp://`. Full policy and hardening checklist: [SECURITY.md](SECURITY.md).
 
 ## Development and CI
 
@@ -246,52 +242,79 @@ CI (`.github/workflows/ci.yml`) runs on every push and PR:
 
 Dependabot watches pip, Docker and GitHub Actions weekly; every bump goes through the same matrix.
 
-## Security
+## Repository layout
 
-Only `ALLOWED_USERS` can use the bot, and each of them can run commands on every server they add — treat those
-ids like root access. The design: SSH host keys pinned on first use, destructive commands ask for confirmation,
-every action lands in `/audit`, credentials are encrypted at rest, URL fetches are SSRF-guarded (host resolved
-once, connection pinned to the checked address), FTP paths are command-injection-safe. Prefer `ssh://`/`ftps://`
-over plain `ftp://`. Full policy and hardening checklist: [SECURITY.md](SECURITY.md).
+<details>
+<summary><b>How the code is organised</b> — click to expand. The full data-flow story is in
+<a href="docs/ARCHITECTURE.md"><b>docs/ARCHITECTURE.md</b></a>.</summary>
 
-## Limits and testing status
+```text
+bot.py            Telegram handlers, start-up, health endpoint            (~1450 lines)
+jobs.py           persistent upload queue: retries, resume, stop/retry, speed/ETA
+sources.py        streaming sources: parallel Telegram windows, HTTP with Range (SSRF-guarded)
+largefiles.py     volume planning for /get, volume ordering for /multi, the /join script
+remote.py         FTP / FTPS / SSH + SFTP client, host-key pinning, path sanitising
+store.py          domain API + Fernet encryption
+backends.py       SQLite / PostgreSQL / MySQL / MongoDB behind one interface
+session_sync.py   Telegram session snapshots + single-instance lock
+perf.py           host detection and speed profiles
+deploy.py         deployment setup wizard (stdlib only)
+migrate.py        copy data between databases
+healthcheck.py    Docker HEALTHCHECK helper
+Dockerfile, docker-compose.yml, render.yaml, heroku.yml, Procfile, deploy/vpsbot.service
+tests/            12 check scripts run by pytest: local FTP + SSH servers, in-memory
+                  databases, 24 security + 22 big-file checks
+docs/             COMMANDS.md, CONFIG.md, DEPLOY.md, ARCHITECTURE.md
+```
 
-* `/get` stages one volume at a time in the temp directory; uploads never touch disk.
-* Run one instance per bot token (enforced by the lock; `DISABLE_LOCK=1` opts out — single-copy setups only).
-* Volume names go up to `.999` (999 volumes) — use a bigger `-v` beyond that.
-* Tested here: SQLite, PostgreSQL, FTP, SSH/SFTP and an in-memory MongoDB stand-in, across the CI matrix.
-  Not exercised: MySQL/MariaDB, a real MongoDB/Atlas, the published Docker image, live Telegram production traffic.
+</details>
 
 ## FAQ
 
 **Can I send a 3 GB file without splitting it?**
-Yes, if the **sender** has Telegram Premium — Telegram itself refuses bigger uploads from free accounts.
-Forward or upload the file; the bot streams it to the server directly (the queue message marks it as an over-
-2 GB transfer). Above 4 GB Telegram has no single-file path at all: split and use `/multi` + `/done`.
+Yes, if the **sender** has Telegram Premium — Telegram itself refuses bigger uploads from free
+accounts. Forward or upload the file; the bot streams it to the server directly (the queue message
+marks it as an over-2 GB transfer). Above 4 GB Telegram has no single-file path at all: split and
+use `/multi` + `/done`.
 
 **Does the bot need a public IP, domain or webhook?**
-No. It talks to Telegram over MTProto with outbound connections only. The HTTP health endpoint is optional
-and for the hosting platform, not for Telegram.
+No. It talks to Telegram over MTProto with outbound connections only. The HTTP health endpoint is
+optional and for the hosting platform, not for Telegram.
 
 **What happens when the host restarts mid-upload?**
-The queue and progress live in the database. On start the bot re-enqueues pending jobs and resumes from the
-`.part` file already on the server — no re-upload from Telegram for completed ranges of `/fetch`, no lost jobs.
+The queue and progress live in the database. On start the bot re-enqueues pending jobs and resumes
+from the `.part` file already on the server — no re-upload from Telegram for completed ranges of
+`/fetch`, no lost jobs.
 
 **Why did my saved servers become unreadable?**
-The `SECRET_KEY` differs from the one that encrypted them. Restore it, or re-add the servers after rotating
-(see [SECURITY.md](SECURITY.md)).
+The `SECRET_KEY` differs from the one that encrypted them. Restore it, or re-add the servers after
+rotating (see [SECURITY.md](SECURITY.md)).
 
 **Can two people use one bot?**
 Yes — put both ids in `ALLOWED_USERS`. Each user has separate servers, folders, queue and audit trail.
 
 **How do I move to a bigger host?**
-Stop the bot, `python migrate.py <old-url> <new-url>`, copy `.env` (same `SECRET_KEY`!), start. The Telegram
-session comes with the database snapshot, so no fresh login is needed.
+Stop the bot, `python migrate.py <old-url> <new-url>`, copy `.env` (same `SECRET_KEY`!), start. The
+Telegram session comes with the database snapshot, so no fresh login is needed.
 
 **Free plan on Render — really?**
-Yes, with caveats (sleeps after 15 min, ephemeral disk, expiring Postgres). The blueprint sets `KEEP_ALIVE=1`
-and requires an external `DATABASE_URL`; details in [docs/DEPLOY.md](docs/DEPLOY.md#render).
+Yes, with caveats (sleeps after 15 min, ephemeral disk, expiring Postgres). The blueprint sets
+`KEEP_ALIVE=1` and requires an external `DATABASE_URL`; details in [docs/DEPLOY.md](docs/DEPLOY.md#render).
+
+## Limits and testing status
+
+* `/get` stages one volume at a time in the temp directory; uploads never touch disk.
+* Run one instance per bot token (enforced by the lock; `DISABLE_LOCK=1` opts out — single-copy
+  setups only).
+* Volume names go up to `.999` (999 volumes) — use a bigger `-v` beyond that.
+* Tested here: SQLite, PostgreSQL, FTP, SSH/SFTP and an in-memory MongoDB stand-in, across the CI
+  matrix. Not exercised: MySQL/MariaDB, a real MongoDB/Atlas, the published Docker image, live
+  Telegram production traffic.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) (Exon101).
+<div align="center">
+
+**MIT** — see [LICENSE](LICENSE) (Exon101)
+
+</div>
