@@ -70,7 +70,7 @@ Environment variables (a `.env` file works too; real variables win). Everything 
 | `PORT` / `HEALTH_PORT` | if set, the bot answers HTTP health checks (`GET /` → 200) on it |
 | `PERFORMANCE` | `auto` (default), `light`, `balanced` or `turbo`; `/perf` shows what was detected and chosen |
 | `TG_PARALLEL`, `TG_WINDOW_MB`, `SFTP_WINDOW_MB`, `FTP_BLOCK_KB`, `PARALLEL_PER_SERVER`, `TG_MAX_MB`, `MAX_FETCH_MB` | override single speed/limit values, see `.env.example` |
-| `KEEP_ALIVE=1` | ping the public URL every 10 min so free web services don't sleep (`KEEP_ALIVE_URL`, or Render's `RENDER_EXTERNAL_URL`) |
+| `KEEP_ALIVE=1` | send a best-effort ping every 10 min; whether it prevents sleep depends on the host (`KEEP_ALIVE_URL`, or Render's `RENDER_EXTERNAL_URL`) |
 | `SESSION_DIR`, `RESET_SESSION`, `LOCK_TTL`, `DISABLE_LOCK` | session and single-instance handling, see [docs/DEPLOY.md](docs/DEPLOY.md) |
 
 ### Databases
