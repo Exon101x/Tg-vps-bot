@@ -705,7 +705,7 @@ async def h_plan_pay(user, data):
 
 
 async def h_plan_status(user, data):
-    """The payment screen polls this: the order state, and - for YouPI checkouts - the live
+    """The payment screen polls this: the order state, and - for gateway checkouts - the live
     gateway status (a missed webhook still self-heals the activation here)."""
     import bot
     oid = int_arg(data, "id")
@@ -714,20 +714,20 @@ async def h_plan_status(user, data):
         raise ApiError("that order is not yours", 404)
     m = payments.meta_get(oid) or {}
     live = None
-    if m.get("provider") == "youpi":
+    if m.get("provider") == "upigw":
         try:
-            live = await asyncio.to_thread(payments.youpi_status, oid)
+            live = await asyncio.to_thread(payments.upigw_status, oid)
         except Exception:
             live = None
-        if live and live.get("status") == "SUCCESS" and o["status"] in ("pending", "awaiting"):
-            try:
-                await bot.gateway_paid(oid, "youpi", str(m.get("youpi_pid") or ""))  # the webhook never landed
+        if live and live.get("status") == "paid" and o["status"] in ("pending", "awaiting"):
+            try:  # the webhook never landed: the gateway's own status is the truth
+                await bot.gateway_paid(oid, "upigw", str(live.get("utr") or m.get("gw_order") or ""))
             except Exception:
                 pass
     recv = m.get("recv") or {}
     o = store.order_get(oid)
     return {"order": _order_json(o), "provider": m.get("provider") or "",
-            "youpi": live,
+            "gateway": live,
             "received": round(sum(e["v"] for e in recv.values() if not e.get("pending")), 12),
             "expected": m.get("expected") or ""}
 
@@ -941,24 +941,27 @@ async def api_response(headers, body):
 
 
 # ---------------------------------------------------------------- payment gateway webhooks
-async def youpi_webhook(headers, body):
-    """YouPI-PG posts signed payment events here: SUCCESS auto-activates the order."""
-    ev, error = payments.youpi_callback(body, headers.get("x-gateway-signature", ""))
+async def upigw_webhook(headers, body):
+    """The UPI Gateway posts timestamped, signed events here: order.paid auto-activates the order."""
+    ev, error = payments.upigw_callback(body, headers.get("x-signature", ""))
     if error:
-        log.warning("YouPI webhook rejected: %s", error)
+        log.warning("UPI Gateway webhook rejected: %s", error)
         return _raw_response(403, b'{"error": "bad signature or payload"}')
     import bot
     if ev.get("action") == "paid":
-        await bot.gateway_paid(ev["oid"], "youpi", ev.get("ref") or "")
+        await bot.gateway_paid(ev["oid"], "upigw", ev.get("ref") or "")
     elif ev.get("action") == "closed":
-        await bot.gateway_note(ev["oid"], f"\u23f3 Order #{ev['oid']} checkout {ev.get('event', '?').lower()} - "
+        await bot.gateway_note(ev["oid"], f"\u23f3 Order #{ev['oid']} checkout {ev.get('event', '?')} - "
                                           "nothing was charged. /plans to try again (the order stays open).")
+    elif ev.get("action") == "review":
+        await bot.gateway_note(ev["oid"], "\U0001f50d Your UTR is in verification on the gateway - if it "
+                                          "checks out, the order confirms on its own. Nothing to do.")
     elif ev.get("action") == "mismatch":
         o = store.order_get(ev["oid"]) or {}
-        store.log(o.get("uid", 0), "payments", f"order #{ev['oid']}: YouPI amount mismatch "
+        store.log(o.get("uid", 0), "payments", f"order #{ev['oid']}: UPI Gateway amount mismatch "
                                                 f"({ev.get('paise')} paise vs {o.get('cents')})")
         try:
-            await bot.notify_admins(f"\u26a0\ufe0f Order #{ev['oid']}: YouPI reported {ev.get('paise')} paise "
+            await bot.notify_admins(f"\u26a0\ufe0f Order #{ev['oid']}: the gateway reported {ev.get('paise')} paise "
                                     f"but the order is {o.get('cents')} - check it by hand.")
         except Exception:
             pass
@@ -1006,9 +1009,9 @@ async def handle(reader, writer):
             k, _, v = h.decode(errors="replace").partition(":")
             headers[k.strip().lower()] = v.strip()
         clen = int(headers.get("content-length", "0") or "0")
-        if path == "/pay/youpi/cb" and method == "POST":  # signed gateway webhooks: no Telegram auth
+        if path == "/pay/upigw/cb" and method == "POST":  # signed gateway webhooks: no Telegram auth
             body = await read_body(reader, clen, MAX_JSON) if clen else b""
-            writer.write(await youpi_webhook(headers, body))
+            writer.write(await upigw_webhook(headers, body))
         elif path == "/pay/cryptapi/cb" and method in ("GET", "POST"):
             writer.write(await cryptapi_webhook(target, headers))
         else:

@@ -61,10 +61,11 @@ hosting.py        VPS provisioning on the owner's host node over SSH: alnum-only
                   credentials, admin-defined command templates, renewal extensions, and the
                   expiry sweep the monitor loop runs.
 
-payments.py       Payment gateways, all optional: YouPI-PG (self-hosted UPI checkout, HMAC-SHA256
-                  webhooks), direct UPI intent links + locally generated QR, and CryptAPI
-                  (crypto to the owner's own wallets, RSA-SHA256 signed callbacks). Order
-                  state lives in the kv store ("pay:<order id>": nonces, refs, received totals).
+payments.py       Payment gateways, all optional: the UPI Gateway (self-hosted UPI checkout,
+                  timestamped HMAC-SHA256 webhooks), direct UPI intent links + locally generated
+                  QR, and CryptAPI (crypto to the owner's own wallets, RSA-SHA256 signed
+                  callbacks). Order state lives in the kv store ("pay:<order id>": nonces,
+                  refs, received totals).
 
 session_sync.py   Telegram session snapshots (encrypted into the kv table) and the single-instance
                   lock with heartbeats - the two mechanisms behind zero-downtime deploys.

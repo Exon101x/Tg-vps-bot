@@ -60,7 +60,7 @@ Heroku or any VPS with Python 3.10+.
 | **Mini App** | `/app` — a web UI inside Telegram: file manager, uploads from your phone, SSH console, VPS stats; sign-in is your Telegram id, no password |
 | **Admin panel** | `/admin` and the app's **Admin** tab — users and usage, orders and revenue, ban / unban, broadcast to everyone (`ADMINS` / `DEV_ID`) |
 | **Subscriptions** | `/plans` — a sellable catalog (Free / PRO / VPS tiers, your prices via `SUBSCRIPTION_PLANS`): buyers pay, plans activate instantly |
-| **Payment gateways** | **UPI** via a self-hosted [YouPI-PG](https://github.com/youpi-pg/YouPI-PG) (checkout page + QR + any UPI app, signed webhooks) or a direct `upi://pay` QR · **crypto** via [CryptAPI](https://cryptapi.io) (BTC, USDT, 100+ coins, paid to **your own wallets**) — both auto-activate the order the second the money lands; `/paid <ref>` remains the manual fallback |
+| **Payment gateways** | **UPI** via a self-hosted [UPI Gateway](https://github.com/Exon101x/upi-gateway) (checkout page + QR + any UPI app, timestamped signed webhooks) or a direct `upi://pay` QR · **crypto** via [CryptAPI](https://cryptapi.io) (BTC, USDT, 100+ coins, paid to **your own wallets**) — both auto-activate the order the second the money lands; `/paid <ref>` remains the manual fallback |
 | **Buy-a-VPS** | VPS plans include real SSH instances with disk quotas, provisioned on your host node — credentials delivered automatically, renewed by re-paying, removed on expiry |
 | **Host your own bots** | buyers add their VPS back as a server and get the full toolbox: upload files from Telegram, `/sh` to set up, `/service` to keep it running — `/hosting` is the 60-second guide |
 | **Force-subscribe** | set `FORCE_SUB` and users must join your channel first — join card with a recheck button in chat, a join screen in the app; admins are exempt |
@@ -182,7 +182,7 @@ environment variables ([docs/CONFIG.md](docs/CONFIG.md#subscriptions--vps-hostin
 | Piece | How it works |
 |---|---|
 | **Catalog** | Free (3 servers) · PRO · VPS Starter (1× VPS: 1 vCPU / 1 GB / 15 GB) · VPS Pro (2× VPS: 2 vCPU / 2 GB / 40 GB each) — replace entirely with `SUBSCRIPTION_PLANS` (JSON). `SUBSCRIPTION_CURRENCY` sets the display currency |
-| **Checkout, automatic** | `/plans` → **Buy** → pick a gateway: a **YouPI-PG** checkout link (UPI QR + app deep links, verified by its bank observers), a **direct UPI QR** from your `UPI_VPA`, or **crypto** (BTC/USDT/…, minted address, exact amount) — the signed webhook (`/pay/youpi/cb`, `/pay/cryptapi/cb` on the bot's own port) auto-approves the order: plan + VPS land in the buyer's chat with zero clicks from you |
+| **Checkout, automatic** | `/plans` → **Buy** → pick a gateway: a **UPI Gateway** checkout page (your self-hosted [upi-gateway](https://github.com/Exon101x/upi-gateway) — dynamic QR + UPI app deep links, bank-verified), a **direct UPI QR** from your `UPI_VPA`, or **crypto** (BTC/USDT/…, minted address, exact amount) — the signed webhook (`/pay/upigw/cb`, `/pay/cryptapi/cb` on the bot's own port) auto-approves the order: plan + VPS land in the buyer's chat with zero clicks from you |
 | **Checkout, manual** | no gateway? `PAYMENT_INFO` carries your links, the buyer sends `/paid <reference>`, you get Approve/Decline buttons — both flows coexist |
 | **Approval** | one tap (or fully automatic, above) activates the plan instantly, extends renewals from the current expiry, and provisions the plan's VPS instances on your host node — credentials land in the buyer's chat and in **Hosting → My VPS** |
 | **The VPSes** | locked-down Linux users with disk quotas on the machine you set with `VPS_NODE_HOST` (override `VPS_PROVISION_CMD`/`VPS_DEPROVISION_CMD` for LXC, Docker or Proxmox). Passwords are Fernet-encrypted at rest, alnum-only (no shell injection), and instances are removed automatically when the subscription lapses |
@@ -191,12 +191,14 @@ environment variables ([docs/CONFIG.md](docs/CONFIG.md#subscriptions--vps-hostin
 | **Admin view** | `/admin` shows active subs, revenue, open orders and VPS counts; `/admin orders` lists what needs a decision |
 
 > [!IMPORTANT]
-> **Gateway security.** Every webhook is verified before anything happens — YouPI's
-> `X-Gateway-Signature` (HMAC-SHA256 of the raw body with `YOUPI_WEBHOOK_SECRET`) and CryptAPI's
-> `X-CA-Signature` (RSA-SHA256 over the request URL, checked against their published pubkey) — then
-> the amount must match the order (crypto: per-uuid totals within `CRYPTAPI_TOLERANCE` %), the
-> per-order nonce must match, and approvals are idempotent: replayed or retried webhooks can never
-> activate anything twice. Everything is audit-logged. YouPI rides the NPCI UPI rails (INR prices);
+> **Gateway security.** Every webhook is verified before anything happens — the UPI Gateway's
+> `X-Signature` (timestamped HMAC-SHA256 of `t` + `.` + raw body with `UPIGW_WEBHOOK_SECRET`,
+> timestamps older than 300 s rejected) and CryptAPI's `X-CA-Signature` (RSA-SHA256 over the
+> request URL, checked against their published pubkey) — then the amount must match the order
+> (crypto: per-uuid totals within `CRYPTAPI_TOLERANCE` %), the per-order nonce must match (crypto),
+> gateway event ids are remembered (at-least-once delivery, replayed events are never re-applied)
+> and `event_sequence` keeps out-of-order events from rewinding state, so approvals are
+> idempotent. Everything is audit-logged. The UPI Gateway rides the NPCI UPI rails (INR prices);
 > CryptAPI forwards to **your own wallets** (verify the `WEBAPP_URL` domain once in their panel).
 
 ## Configuration
@@ -222,7 +224,7 @@ is the template.
 | HTTP port / Mini App | `PORT` · `HEALTH_PORT` · `HEALTH_BIND` · `WEBAPP_URL` (public HTTPS address that enables the `/app` button) · `WEB_MAX_MB` (app upload cap, default 4096) · `WEB_RATE` (app API requests per minute per user, default 90) |
 | Admin & community | `ADMINS` · `DEV_ID` (developer id: admin + force-sub exempt) · `DEV_CHANNEL` (developer credit) · `FORCE_SUB` (channel users must join) |
 | Subscriptions & VPS hosting | `SUBSCRIPTION_PLANS` (JSON catalog) · `SUBSCRIPTION_CURRENCY` · `PAYMENT_INFO` · `VPS_NODE_HOST` `VPS_NODE_PORT` `VPS_NODE_USER` `VPS_NODE_PASS`/`VPS_NODE_KEY` (the host node) · `VPS_PUBLIC_HOST` · `VPS_SSH_PORT` · `VPS_PROVISION_CMD` · `VPS_DEPROVISION_CMD` |
-| Payment gateways | `YOUPI_URL` `YOUPI_MERCHANT_ID` `YOUPI_API_KEY` `YOUPI_WEBHOOK_SECRET` (self-hosted UPI checkout) · `UPI_VPA` `UPI_NAME` (direct UPI QR) · `CRYPTAPI_<COIN>_ADDR` e.g. `CRYPTAPI_BTC_ADDR`, `CRYPTAPI_TRC20_USDT_ADDR` (crypto to your own wallets) · `CRYPTAPI_TOLERANCE` `CRYPTAPI_CONFIRMATIONS` `CRYPTAPI_API_KEY` `CRYPTAPI_BASE` |
+| Payment gateways | `UPIGW_URL` `UPIGW_API_KEY` `UPIGW_API_SECRET` `UPIGW_WEBHOOK_SECRET` `UPIGW_MAX_SKEW` (self-hosted [UPI Gateway](https://github.com/Exon101x/upi-gateway) checkout) · `UPI_VPA` `UPI_NAME` (direct UPI QR) · `CRYPTAPI_<COIN>_ADDR` e.g. `CRYPTAPI_BTC_ADDR`, `CRYPTAPI_TRC20_USDT_ADDR` (crypto to your own wallets) · `CRYPTAPI_TOLERANCE` `CRYPTAPI_CONFIRMATIONS` `CRYPTAPI_API_KEY` `CRYPTAPI_BASE` |
 | Transfer tuning | `TG_PARALLEL` · `TG_WINDOW_MB` · `SFTP_WINDOW_MB` · `FTP_BLOCK_KB` · `PARALLEL_PER_SERVER` |
 | Size limits | `TG_MAX_MB` · `MAX_FETCH_MB` · `MAX_RETRIES` |
 | Monitoring | `MONITOR_INTERVAL` · `DISK_ALERT` · `MEM_ALERT` |

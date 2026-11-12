@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.8.1 — UPI integration moved to the author's own UPI Gateway
+
+* **The auto-verified UPI provider is now [upi-gateway](https://github.com/Exon101x/upi-gateway)**
+  (the author's self-hosted multi-merchant UPI payment gateway: dynamic QR codes, payment
+  verification, account rotation, timestamped webhook signatures) — replacing the previous
+  YouPI-PG integration, with the integration built against the gateway's real API:
+  orders are created with `POST /api/v1/orders` (`X-Api-Key`/`X-Api-Secret`, unique
+  `client_order_id` per bot order — a retried create reuses the gateway's existing order
+  instead of failing) and the buyer gets the gateway's checkout page **plus** its
+  `upi_intent` deep link rendered as a scannable QR with the amount pre-filled.
+* **Config**: `UPIGW_URL` + `UPIGW_API_KEY` + `UPIGW_API_SECRET` + `UPIGW_WEBHOOK_SECRET`
+  (from the gateway's Dashboard → API & Webhooks; `UPIGW_MAX_SKEW`, default 300 s, tunes the
+  timestamp window) — all optional, independent, INR prices only. The old `YOUPI_*` variables
+  are gone.
+* **Webhooks exactly as the gateway sends them**: `POST {WEBAPP_URL}/pay/upigw/cb` with
+  `X-Signature: t=<unix-seconds>,v1=<HMAC-SHA256 of t + "." + raw body>`. The timestamp must
+  be fresh, the signature is compared constant-time, the amount must match the order to the
+  paisa, and delivery semantics are honored precisely: **at-least-once** (every `event_id` is
+  remembered — replays are ack'd, never re-applied), **out-of-order safe**
+  (`event_sequence` keeps older events from rewinding newer state), and `order.paid` wins over
+  any earlier state — mirroring the gateway's own transition rules, so a late payment inside
+  its 24-hour recovery window still activates even after an `order.expired`.
+  `order.under_review` notifies the buyer their UTR is being verified; `order.expired`
+  notifies them nothing was charged; an amount mismatch alerts the admins instead of
+  activating.
+* **Self-healing kept**: if the webhook never lands, the Mini App's status poll
+  (`GET /api/v1/orders/{id}`) sees the gateway's live `paid` state and activates from there —
+  the response field is now the provider-neutral `gateway`.
+* **Better gateway errors**: 4xx/5xx answers from either gateway are surfaced with their JSON
+  reason (`{"message": …}`) instead of a raw `HTTPError`, and transport failures say
+  "cannot reach the gateway".
+* **Tests**: `tests/check_payments.py` now runs a miniature of the real gateway (Laravel-style
+  `POST /api/v1/orders` + `GET /api/v1/orders/{id}`, `X-Api-Key`/`X-Api-Secret` auth, unique
+  `client_order_id`) over real HTTP — covering order creation, duplicate-create reuse, signed
+  `order.paid`/`order.under_review`/`order.expired` handling, replayed `event_id`s,
+  out-of-order sequences, paid-after-expired, stale timestamps, forged signatures, amount
+  mismatches, wrong merchant credentials, the Mini App pay routes and the lost-webhook
+  self-heal — 41 checks in total, all over live sockets.
+
 ## 1.8.0 — Payment gateways: UPI and crypto, auto-confirming
 
 * **Payment gateway system** (`payments.py`): three optional, independent ways to take money —

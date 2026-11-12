@@ -133,10 +133,11 @@ All of them need `WEBAPP_URL` (the bot's public HTTPS address) for their webhook
 |---|---|---|
 | `UPI_VPA` | unset | **Direct UPI** — your UPI id (`name@bank`). The buyer gets a `upi://pay` QR + one-tap app button; confirmation stays manual (`/paid <UTR>`) because a personal UPI id has no bank feed |
 | `UPI_NAME` | `vpsbot` | The payee name shown in the UPI app |
-| `YOUPI_URL` | unset | **YouPI-PG** ([self-hosted UPI gateway](https://github.com/youpi-pg/YouPI-PG)) base URL, e.g. `https://pay.yourdomain.com`. The buyer gets a checkout session (dynamic QR + GPay/PhonePe/Paytm/CRED deep links + WhatsApp OTP, whatever your instance is set up for) and pays your merchant VPA — **INR prices only** (`SUBSCRIPTION_CURRENCY=INR`) |
-| `YOUPI_MERCHANT_ID` | default merchant | The merchant id from your YouPI panel (`X-Merchant-Id` header) |
-| `YOUPI_API_KEY` | unset | Your YouPI merchant API key (`X-Merchant-Api-Key` header) |
-| `YOUPI_WEBHOOK_SECRET` | unset | The shared secret YouPI signs its webhooks with (`X-Gateway-Signature: sha256=…`, HMAC-SHA256 of the raw body). Point your YouPI merchant webhook at `{WEBAPP_URL}/pay/youpi/cb` — a verified `SUCCESS` with a matching amount **auto-activates the order**; `FAILED`/`EXPIRED`/`CANCELLED` tell the buyer nothing was charged |
+| `UPIGW_URL` | unset | **UPI Gateway** — your self-hosted multi-merchant UPI gateway ([github.com/Exon101x/upi-gateway](https://github.com/Exon101x/upi-gateway)) base URL, e.g. `https://pay.yourdomain.com`. The bot creates each order via `POST /api/v1/orders` and the buyer pays on the gateway's checkout page — dynamic QR, one-tap GPay/PhonePe/Paytm deep links, whatever accounts you configured — **INR prices only** (`SUBSCRIPTION_CURRENCY=INR`) |
+| `UPIGW_API_KEY` | unset | Your merchant API key from the gateway's **Dashboard → API & Webhooks** (`X-Api-Key` header) |
+| `UPIGW_API_SECRET` | unset | Your merchant API secret from the same screen (`X-Api-Secret` header) |
+| `UPIGW_WEBHOOK_SECRET` | unset | The **Live** webhook signing secret from the same screen. Point the gateway's webhook URL at `{WEBAPP_URL}/pay/upigw/cb` — events arrive as `X-Signature: t=<unix-seconds>,v1=<HMAC-SHA256 of `t` + `.` + raw body>`; a verified `order.paid` with a matching amount **auto-activates the order**, `order.expired` tells the buyer nothing was charged, `order.under_review` tells them their UTR is being verified. Deliveries are at-least-once and can arrive out of order — every `event_id` is remembered (replays are ack'd, never re-applied) and `event_sequence` keeps older events from reverting newer state (except `order.paid`, which the gateway itself lets win over any earlier state — a late payment inside its 24-hour recovery window still activates) |
+| `UPIGW_MAX_SKEW` | `300` | How many seconds a webhook timestamp may drift before it counts as stale (the gateway docs recommend 300) |
 | `CRYPTAPI_<COIN>_ADDR` | unset | **CryptAPI** ([cryptapi.io](https://cryptapi.io), no signup, fees 1→0.25 %, paid out to **your own wallets**). One variable per coin: `CRYPTAPI_BTC_ADDR=bc1…`, `CRYPTAPI_TRC20_USDT_ADDR=T…` (tokens are `<CHAIN>_<TOKEN>` → `trc20/usdt`). Each purchase mints a payment address with a per-order nonce; the callback (signed `X-CA-Signature`, RSA-SHA256 over the full request URL, verified against CryptAPI's `pubkey` endpoint — the same scheme their official plugins use) **auto-activates the order** when the confirmed total reaches the expected amount |
 | `CRYPTAPI_TOLERANCE` | `1` | Percent of underpayment still accepted (0 = exact, max 10). Partial payments accumulate per transaction id — the buyer can pay in several sends |
 | `CRYPTAPI_CONFIRMATIONS` | `1` | Blockchain confirmations before activation (pending transactions notify the buyer first) |
@@ -147,13 +148,14 @@ Setup notes:
 
 - **CryptAPI requires a verified domain**: in their control panel verify the `WEBAPP_URL` domain once
   (DNS TXT record or an HTTPS file) — payment addresses are only created for verified callback domains.
-- **YouPI requires a reachable webhook**: your instance runs somewhere that can POST to
-  `{WEBAPP_URL}/pay/youpi/cb`; HTTPS everywhere.
-- The webhooks are verified first (signature), then the **amount must match the order** (crypto: the
-  per-uuid confirmed total within `CRYPTAPI_TOLERANCE` %), then the **per-order nonce** (crypto), and
-  approvals are **idempotent** — replayed, retried or duplicated callbacks can never activate twice.
+- **The UPI Gateway needs a reachable webhook**: your instance runs somewhere that can POST to
+  `{WEBAPP_URL}/pay/upigw/cb`; HTTPS everywhere.
+- The webhooks are verified first (signature + fresh timestamp), then the **amount must match the
+  order** (crypto: the per-uuid confirmed total within `CRYPTAPI_TOLERANCE` %), then the **per-order
+  nonce** (crypto), and approvals are **idempotent** — replayed, retried or duplicated callbacks can
+  never activate twice.
 - The buyer's chat gets: payment seen (pending) → confirmed + plan active + VPS credentials; the owner
-  gets an audit line and a receipt. A missed YouPI webhook even self-heals: the Mini App polls the
+  gets an audit line and a receipt. A missed gateway webhook even self-heals: the Mini App polls the
   gateway while the checkout is open.
 
 ## Mini App authentication

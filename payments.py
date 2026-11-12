@@ -1,16 +1,24 @@
-"""Payment gateways for the subscription system: UPI (YouPI-PG / direct intent links) and crypto (CryptAPI).
+"""Payment gateways for the subscription system: UPI Gateway (self-hosted, auto-verified),
+direct UPI intent links, and crypto (CryptAPI).
 
 Three ways an owner can take payments, configured with env vars, all optional and independent:
 
-  YOUPI (auto-verified UPI)   YOUPI_URL + YOUPI_WEBHOOK_SECRET (+ optional YOUPI_MERCHANT_ID /
-                              YOUPI_API_KEY). A session is created on the self-hosted YouPI-PG
-                              (https://github.com/youpi-pg/YouPI-PG) and the buyer gets a checkout
-                              link with a dynamic QR + UPI app deep links. When the buyer pays, YouPI's
-                              banking observers fire a signed webhook at this bot:
-                              POST {WEBAPP_URL}/pay/youpi/cb, header X-Gateway-Signature:
-                              sha256=<hmac_sha256(webhook_secret, raw_body)>. Verified + amount
-                              matched + idempotent -> the plan (and its VPS) activates instantly.
-                              INR only (it rides the NPCI UPI rails).
+  UPI GATEWAY (auto-verified    UPIGW_URL + UPIGW_API_KEY + UPIGW_API_SECRET + UPIGW_WEBHOOK_SECRET.
+  UPI)                          An order is created on the owner's self-hosted UPI Gateway
+                               (https://github.com/Exon101x/upi-gateway - a multi-merchant UPI
+                               payment gateway with dynamic QR codes, payment verification and
+                               account rotation) and the buyer gets its checkout page
+                               (dynamic QR + one-tap UPI app deep links). When the payment
+                               verifies, the gateway fires a signed webhook at this bot:
+                               POST {WEBAPP_URL}/pay/upigw/cb, header X-Signature:
+                               t=<unix-seconds>,v1=<hmac_sha256(webhook_secret, t + '.' + raw_body)>.
+                               The timestamp must be fresh (UPIGW_MAX_SKEW seconds), the amount
+                               must match the order, every event_id is remembered (delivery is
+                               at-least-once and can arrive out of order) and event_sequence
+                               keeps older events from reverting newer state - except
+                               order.paid, which the gateway itself lets win over any earlier
+                               state. Verified + matched + idempotent -> the plan (and its VPS)
+                               activates instantly. INR only (it rides the NPCI UPI rails).
 
   UPI direct (manual)         UPI_VPA (+ UPI_NAME). A classic upi://pay intent link + QR the buyer
                               opens in GPay/PhonePe/Paytm, whatever. There is no bank feed in this
@@ -31,10 +39,11 @@ Three ways an owner can take payments, configured with env vars, all optional an
 Payments state lives in the kv store (key "pay:<order id>"): nonce, provider refs, addresses,
 expected coin amounts, what has been received so far. No schema migration, all four databases.
 
-Security: every webhook is verified before anything happens (HMAC-SHA256 for YouPI, RSA-SHA256 for
-CryptAPI), nonces are compared with hmac.compare_digest, amounts must match the order, approvals are
-idempotent (a replayed or retried webhook can never activate twice), and every decision is audit-
-logged. Gateway URLs come from the owner's env, never from user input.
+Security: every webhook is verified before anything happens (timestamped HMAC-SHA256 for the UPI
+Gateway, RSA-SHA256 for CryptAPI), signatures and nonces are compared with hmac.compare_digest,
+amounts must match the order, event ids are remembered so replayed or retried webhooks can never
+activate twice, and every decision is audit-logged. Gateway URLs come from the owner's env, never
+from user input.
 
 Source: https://github.com/Exon101x/Tg-vps-bot - fork it, keep the link, sell your own plans.
 """
@@ -45,8 +54,10 @@ import io
 import json
 import logging
 import os
+import re
 import secrets
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -55,16 +66,15 @@ from util import env_int
 
 log = logging.getLogger("payments")
 
-REPO_URL = "https://github.com/Exon101x/Tg-vps-bot"
-
 # ---------------------------------------------------------------- config (all optional, never crashes)
 UPI_VPA = os.getenv("UPI_VPA", "").strip()                 # the owner's UPI id, e.g. owner@okicici
 UPI_NAME = (os.getenv("UPI_NAME", "").strip() or "vpsbot")[:64]
 
-YOUPI_URL = os.getenv("YOUPI_URL", "").strip().rstrip("/")  # the self-hosted YouPI-PG base URL
-YOUPI_MERCHANT_ID = os.getenv("YOUPI_MERCHANT_ID", "").strip()
-YOUPI_API_KEY = os.getenv("YOUPI_API_KEY", "").strip()
-YOUPI_WEBHOOK_SECRET = os.getenv("YOUPI_WEBHOOK_SECRET", "").strip()
+UPIGW_URL = os.getenv("UPIGW_URL", "").strip().rstrip("/")  # the self-hosted UPI Gateway base URL
+UPIGW_API_KEY = os.getenv("UPIGW_API_KEY", "").strip()     # Dashboard -> API & Webhooks (X-Api-Key)
+UPIGW_API_SECRET = os.getenv("UPIGW_API_SECRET", "").strip()  # same screen (X-Api-Secret)
+UPIGW_WEBHOOK_SECRET = os.getenv("UPIGW_WEBHOOK_SECRET", "").strip()  # the Live webhook signing secret
+UPIGW_MAX_SKEW = env_int("UPIGW_MAX_SKEW", 300, lo=30, hi=3600)  # how stale a webhook timestamp may be
 
 CRYPTAPI_BASE = os.getenv("CRYPTAPI_BASE", "").strip().rstrip("/") or "https://api.cryptapi.io"
 CRYPTAPI_API_KEY = os.getenv("CRYPTAPI_API_KEY", "").strip()  # BlockBee pro: swaps the base + signs in
@@ -92,11 +102,11 @@ def _coin_addrs():
 CRYPT_ADDRS = _coin_addrs()  # {"btc": "bc1...", "trc20/usdt": "T..."}
 
 
-def youpi_ready():
-    return bool(YOUPI_URL and YOUPI_WEBHOOK_SECRET and WEBAPP_URL)
+def upigw_ready():
+    return bool(UPIGW_URL and UPIGW_API_KEY and UPIGW_API_SECRET and UPIGW_WEBHOOK_SECRET and WEBAPP_URL)
 
 
-def youpi_currency_ok(currency):
+def upigw_currency_ok(currency):
     return (currency or "").upper() == "INR"
 
 
@@ -109,8 +119,19 @@ def _http(url, data=None, headers=None, timeout=25):
     """One request, one shot. Returns parsed JSON (dict). Raises GatewayError on transport/API error."""
     req = urllib.request.Request(url, data=data, headers=headers or {},
                                  method="POST" if data is not None else "GET")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        body = r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read()
+    except urllib.error.HTTPError as e:  # gateways answer 4xx/5xx with a JSON reason
+        detail = ""
+        try:
+            d = json.loads(e.read().decode() or "{}")
+            detail = str(d.get("message") or d.get("error") or "")[:200]
+        except Exception:
+            pass
+        raise GatewayError(detail or f"gateway answered HTTP {e.code}") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise GatewayError(f"cannot reach the gateway ({type(e).__name__})") from None
     try:
         out = json.loads(body.decode() or "{}")
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -156,52 +177,69 @@ def meta_set(oid, **fields):
     return m
 
 
-# ---------------------------------------------------------------- YouPI-PG (self-hosted UPI gateway)
-def youpi_create(oid, plan, buyer_name=""):
-    """Create a checkout session on the owner's YouPI-PG. Returns {payment_id, checkout_url,...}."""
+# ---------------------------------------------------------------- UPI Gateway (self-hosted, auto-verified)
+def upigw_headers():
+    return {"X-Api-Key": UPIGW_API_KEY, "X-Api-Secret": UPIGW_API_SECRET}
+
+
+def upigw_create(oid, plan, buyer_name=""):
+    """Create an order on the owner's UPI Gateway (POST /api/v1/orders). Returns the gateway's
+    checkout page, order number and UPI deep link. client_order_id ('vpsbot<oid>') is unique per
+    merchant, so a retried order reuses the gateway's existing one instead of failing."""
     body = json.dumps({
-        "orderId": f"vpsbot-{oid}",
-        "amount": f"{plan.cents / 100:.2f}", "currency": "INR",
-        "description": f"vpsbot {plan.name} plan ({plan.days} days)",
-        "customer": {"name": (buyer_name or "")[:64]},
-        "metadata": {"order": oid, "bot": REPO_URL},
+        "amount": round(plan.cents / 100, 2),
+        "client_order_id": f"vpsbot{oid}",
+        "customer_name": (buyer_name or "")[:100],
+        "note": f"{plan.name} plan ({plan.days} days)"[:50],
     }).encode()
-    headers = {"Content-Type": "application/json", "Idempotency-Key": f"vpsbot-{oid}"}
-    if YOUPI_MERCHANT_ID:
-        headers["X-Merchant-Id"] = YOUPI_MERCHANT_ID
-    if YOUPI_API_KEY:
-        headers["X-Merchant-Api-Key"] = YOUPI_API_KEY
-    out = _http(YOUPI_URL + "/api/v1/payments", data=body, headers=headers)
-    if not out.get("checkoutUrl") or not out.get("paymentId"):
-        raise GatewayError("YouPI returned no checkout URL")
-    meta_set(oid, provider="youpi", youpi_pid=str(out["paymentId"])[:64],
-             youpi_checkout=str(out["checkoutUrl"])[:500], amount_paise=plan.cents)
-    return {"payment_id": str(out["paymentId"]), "checkout_url": str(out["checkoutUrl"]),
-            "status": out.get("status", "INITIATED")}
+    try:
+        out = _http(UPIGW_URL + "/api/v1/orders", data=body,
+                    headers={"Content-Type": "application/json", **upigw_headers()})
+    except GatewayError as e:
+        if "taken" not in str(e):  # not a duplicate client_order_id: a real failure
+            raise
+        out = _http(f"{UPIGW_URL}/api/v1/orders/vpsbot{oid}", headers=upigw_headers())  # already created
+    d = out.get("data") or {}
+    if not d.get("order_id") or not d.get("payment_url"):
+        raise GatewayError("the gateway returned no payment URL")
+    meta_set(oid, provider="upigw", gw_order=str(d["order_id"])[:64],
+             gw_checkout=str(d["payment_url"])[:500], gw_intent=str(d.get("upi_intent") or "")[:500],
+             amount_paise=plan.cents, gw_events={}, gw_last_seq=0)
+    return {"order_id": str(d["order_id"]), "checkout_url": str(d["payment_url"]),
+            "intent": str(d.get("upi_intent") or "") or None,
+            "status": str(d.get("status") or "pending"), "expires_at": str(d.get("expires_at") or "")}
 
 
-def youpi_status(oid):
+def upigw_status(oid):
     """Live status from the gateway (the Mini App polls this while the checkout is open)."""
     m = meta_get(oid)
-    if not m.get("youpi_pid"):
+    if not m.get("gw_order"):
         return None
     try:
-        out = _http(f"{YOUPI_URL}/api/v1/payments/{urllib.parse.quote(m['youpi_pid'])}")
-        return {k: out.get(k) for k in ("paymentId", "status", "method", "verificationLevel", "completedAt")}
+        out = _http(f"{UPIGW_URL}/api/v1/orders/{urllib.parse.quote(str(m['gw_order']))}",
+                    headers=upigw_headers())
+        d = out.get("data") or {}
+        return {k: d.get(k) for k in ("order_id", "status", "utr", "paid_at", "environment",
+                                      "test", "expires_at")}
     except Exception as e:
-        log.warning("YouPI status lookup failed for order %s: %s", oid, e)
+        log.warning("UPI Gateway status lookup failed for order %s: %s", oid, e)
         return None
 
 
-def youpi_verify(raw_body, sig_header):
-    """X-Gateway-Signature: sha256=<hex> - HMAC-SHA256 of the RAW body with the webhook secret."""
-    if not YOUPI_WEBHOOK_SECRET or not sig_header:
+def upigw_verify(raw_body, sig_header):
+    """X-Signature: t=<unix-seconds>,v1=<hex> - HMAC-SHA256 of '<t>.<raw body>' with the webhook
+    signing secret, constant-time compared. Timestamps older than UPIGW_MAX_SKEW are stale."""
+    if not UPIGW_WEBHOOK_SECRET or not sig_header:
         return False
-    sig = (sig_header or "").strip().lower()
-    if sig.startswith("sha256="):
-        sig = sig[len("sha256="):]
-    want = hmac.new(YOUPI_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(want, sig)
+    mm = re.match(r"^t=(\d{1,12}),v1=([0-9a-f]{64})$", sig_header.strip())
+    if not mm:
+        return False
+    t = int(mm.group(1))
+    if abs(time.time() - t) > UPIGW_MAX_SKEW:
+        return False
+    want = hmac.new(UPIGW_WEBHOOK_SECRET.encode(), f"{t}.".encode() + raw_body,
+                    hashlib.sha256).hexdigest()
+    return hmac.compare_digest(want, mm.group(2))
 
 
 # ---------------------------------------------------------------- CryptAPI (crypto to your own wallets)
@@ -294,11 +332,11 @@ def crypt_verify(raw_target, sig_b64):
 # ---------------------------------------------------------------- choosing + starting a payment
 def methods(plan, currency=None):
     """Payment options for a plan, in a stable order, with what each needs from the buyer."""
-    from subscriptions import CURRENCY  # the catalog's display currency: YouPI is INR-only
+    from subscriptions import CURRENCY  # the catalog's display currency: the gateway is INR-only
     cur = (currency or CURRENCY or "").upper()
     out = []
-    if youpi_ready() and youpi_currency_ok(cur):
-        out.append({"key": "youpi", "kind": "upi", "auto": True,
+    if upigw_ready() and upigw_currency_ok(cur):
+        out.append({"key": "upigw", "kind": "upi", "auto": True,
                     "label": "UPI - checkout page (auto-confirm)"})
     if UPI_VPA:
         out.append({"key": "upi", "kind": "upi", "auto": False,
@@ -320,15 +358,16 @@ def upi_intent(amount_inr, ref, note="vpsbot plan"):
 def start(oid, plan, key, buyer_name="", currency="USD"):
     """Start one payment for an open order. Returns a dict the chat UI and the Mini App both render.
 
-    {mode: 'youpi'|'upi'|'crypto', auto: bool, text: str, buttons: [{label,url}], qr: <png bytes>,
-     address, amount, coin, uri, checkout_url}
+    {mode: 'upigw'|'upi'|'crypto', auto: bool, text: str, buttons: [{label,url}], qr: <png bytes>,
+     address, amount, coin, uri, checkout_url, intent}
     """
     key = (key or "").strip()
     mkey = key[6:] if key.startswith("crypt:") else key
-    if key == "youpi":
-        r = youpi_create(oid, plan, buyer_name)
-        return {"mode": "youpi", "auto": True, "checkout_url": r["checkout_url"],
-                "qr": None, "text": "UPI checkout created - it confirms automatically when you pay."}
+    if key == "upigw":
+        r = upigw_create(oid, plan, buyer_name)
+        return {"mode": "upigw", "auto": True, "checkout_url": r["checkout_url"],
+                "intent": r.get("intent"), "qr": qr_png(r["intent"]) if r.get("intent") else None,
+                "text": "UPI checkout created on the gateway - it confirms automatically when you pay."}
     if key == "upi" and UPI_VPA:
         link = upi_intent(plan.cents / 100, f"vpsbot{oid}", note=f"{plan.name} plan")
         meta_set(oid, provider="upi", expected=f"{plan.cents / 100:.2f}")
@@ -345,49 +384,75 @@ def start(oid, plan, key, buyer_name="", currency="USD"):
 
 
 # ---------------------------------------------------------------- webhook processing (called by webapi)
-def youpi_callback(raw_body, sig_header):
-    """Verify a YouPI-PG webhook and decide what to do with it.
+def upigw_callback(raw_body, sig_header):
+    """Verify a UPI Gateway webhook and decide what to do with it.
+
+    Delivery is at-least-once and may arrive out of order: every event_id is remembered (a replay
+    is ack'd and dropped), event_sequence keeps an older event from reverting a newer state, and
+    order.paid - which the gateway itself lets win over any earlier state - is honored whenever
+    the order is still open and the amount matches (the gateway keeps a 24-hour late-payment
+    recovery window after expiry, so a paid can legitimately arrive after an expired).
 
     Returns (event, error): event is None on failure. Actions:
-      paid   - SUCCESS with a matching amount: activate the order
-      closed - FAILED / EXPIRED / CANCELLED: tell the buyer
-      ignore - malformed / currency we did not expect: log only
+      paid   - order.paid with a matching amount: activate the order
+      closed - order.expired / sandbox order.failed / order.timeout: tell the buyer
+      review - order.under_review: the buyer's UTR is being verified on the gateway
+      ignore - not ours / not applicable / stale sequence: ack and move on
     """
-    if not youpi_verify(raw_body, sig_header):
-        return None, "bad signature"
+    if not upigw_verify(raw_body, sig_header):
+        return None, "bad or stale signature"
     try:
         d = json.loads(raw_body.decode())
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None, "bad json"
-    meta = d.get("metadata") or {}
-    oid = 0
-    try:
-        oid = int(meta.get("order") or 0)
-    except (TypeError, ValueError):
-        oid = 0
-    if not oid:  # older gateway builds only send the merchant orderId
-        mo = str(d.get("orderId") or "")
-        oid = int(mo.rsplit("-", 1)[-1]) if mo.rsplit("-", 1)[-1].isdigit() else 0
-    if not oid:
+    data = d.get("data") or {}
+    co = str(data.get("client_order_id") or "")
+    if not co.startswith("vpsbot") or not co[6:].isdigit():
         return None, "no order in payload"
+    oid = int(co[6:])
     o = store.order_get(oid)
     if not o:
         return None, "unknown order"
-    event = str(d.get("event") or "").upper()
-    ref = str(d.get("utr") or d.get("paymentId") or "")
-    if event == "SUCCESS":
-        if str(d.get("method") or "UPI").upper() != "UPI":
-            return {"action": "ignore", "oid": oid, "why": f"method {d.get('method')}"}, None
+    event = str(d.get("event") or "")
+    eid = str(d.get("event_id") or "")[:64]
+    try:
+        seq = int(d.get("event_sequence") or 0)
+    except (TypeError, ValueError):
+        seq = 0
+    m = meta_get(oid)
+    events = dict(m.get("gw_events") or {})
+    last_seq = int(m.get("gw_last_seq") or 0)
+
+    def seen(apply=True):  # remember the event id (dedupe) and, unless it is stale, the sequence
+        if eid:
+            events[eid] = seq
+        meta_set(oid, gw_events=events,
+                 **({"gw_last_seq": max(last_seq, seq)} if apply else {}))
+
+    if eid and eid in events:  # a replayed delivery: ack, never apply twice
+        return {"action": "dup", "oid": oid, "why": f"event {eid[:12]} already seen"}, None
+    if o["status"] not in ("pending", "awaiting"):
+        seen(apply=False)
+        return {"action": "ignore", "oid": oid, "why": f"order is {o['status']}"}, None
+    if event != "order.paid" and seq and seq <= last_seq:  # out of order: an older state
+        seen(apply=False)
+        return {"action": "ignore", "oid": oid, "why": f"stale sequence {seq} <= {last_seq}"}, None
+    if event == "order.paid":
+        ref = str(data.get("utr") or data.get("order_id") or "")[:128]
         try:
-            paise = int(d.get("amountPaise") or round(float(d.get("amount") or 0) * 100))
+            paise = round(float(data.get("amount") or 0) * 100)
         except (TypeError, ValueError):
             return None, "bad amount"
         if paise != o["cents"]:  # what the buyer paid must be what the order costs
-            log.warning("YouPI webhook amount mismatch on #%s: %s != %s", oid, paise, o["cents"])
+            log.warning("UPI Gateway webhook amount mismatch on #%s: %s != %s", oid, paise, o["cents"])
             return {"action": "mismatch", "oid": oid, "paise": paise, "ref": ref}, None
-        return {"action": "paid", "oid": oid, "ref": ref[:128], "paise": paise}, None
-    if event in ("FAILED", "EXPIRED", "CANCELLED"):
-        return {"action": "closed", "oid": oid, "event": event, "ref": ref[:128]}, None
+        seen()
+        return {"action": "paid", "oid": oid, "ref": ref, "paise": paise}, None
+    seen()  # a state transition on an open order: remember it, then classify
+    if event == "order.under_review":
+        return {"action": "review", "oid": oid, "ref": str(data.get("submitted_utr") or "")[:128]}, None
+    if event in ("order.expired", "order.failed", "order.timeout"):
+        return {"action": "closed", "oid": oid, "event": event.split(".", 1)[-1]}, None
     return {"action": "ignore", "oid": oid, "why": f"event {event or '?'}"}, None
 
 

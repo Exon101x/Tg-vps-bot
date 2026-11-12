@@ -928,7 +928,7 @@ async def _fulfill(o, p):
 
 
 async def gateway_paid(oid, provider, ref):
-    """A payment gateway webhook (UPI YouPI / CryptAPI crypto) confirmed the money: activate
+    """A payment gateway webhook (UPI Gateway or CryptAPI crypto) confirmed the money: activate
     instantly. Idempotent - replays and retries can never activate twice."""
     o, error = subscriptions.order_gateway_paid(oid, provider, ref)
     if not o or error:
@@ -1912,15 +1912,21 @@ async def on_callback(_, cq):
                                         (cq.from_user.first_name or "")[:32], CURRENCY)
         except Exception as e:
             return await msg.reply(f"❌ {e}\nPick another way to pay: /plans")
-        if r["mode"] == "youpi":
+        if r["mode"] == "upigw":
             try:
+                rows = [[Btn("💳 Open the checkout page", url=r["checkout_url"])]]
+                if r.get("intent"):
+                    rows.append([Btn("📲 Open the UPI app", url=r["intent"])])
                 await msg.edit_text(f"🧾 Order #{o['id']} · {p.name} · {p.price:g} {CURRENCY}\n\n"
-                                    "💳 Pay on the checkout page (QR code + any UPI app). It confirms here "
-                                    "automatically - no /paid needed.\n⏳ The checkout window is short: pay right "
-                                    "after you open it.", reply_markup=InlineKeyboardMarkup(
-                                        [[Btn("💳 Open the checkout page", url=r["checkout_url"])]]))
+                                    "💳 Pay on the gateway's checkout page (dynamic QR + any UPI app). "
+                                    "It confirms here automatically - no /paid needed.\n⏳ The checkout "
+                                    "window is short: pay right after you open it.",
+                                    reply_markup=InlineKeyboardMarkup(rows))
             except Exception:
                 pass
+            if r.get("qr"):  # the gateway's UPI deep link as a scannable QR, amount pre-filled
+                await msg.reply_photo(r["qr"], caption="Or scan this in any UPI app - the amount is "
+                                                       "filled in already.")
         elif r["mode"] == "upi":
             await msg.reply_photo(r["qr"], caption=f"🧾 Order #{o['id']} · {p.name} · {r['amount']} INR\n\n"
                                  f"Payee: {r['vpa']}\nScan, or tap the button below, pay in any UPI app,\n"
