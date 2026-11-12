@@ -78,6 +78,12 @@ perf.py           CPU/RAM detection (cgroup v2 and v1 aware) and the speed profi
 deploy.py         The setup wizard (standard library only): validates credentials, writes a safe .env,
                   can bundle PostgreSQL/MongoDB, prepares Docker/systemd/Render/PaaS.
 
+setup_gateway.py  The payment-gateway setup tool (standard library only, runs before the bot exists):
+                  guided wizard for UPI Gateway / direct UPI / CryptAPI with per-value validation,
+                  secret generation, live probes (gateway credentials, webhook port, CryptAPI
+                  pubkey), --check diagnostics and --write batch mode; edits only the gateway
+                  keys in .env.
+
 migrate.py        One-shot data copy between two DATABASE_URLs.
 
 healthcheck.py    What the Docker HEALTHCHECK runs: hits the health endpoint.
@@ -86,7 +92,7 @@ healthcheck.py    What the Docker HEALTHCHECK runs: hits the health endpoint.
 Dependency direction: `bot.py` → `jobs.py` → `sources.py` + `remote.py` → `store.py` → `backends.py`;
 `subscriptions.py`, `hosting.py` and `payments.py` sit on `store.py` (hosting also uses `remote.py`
 for the node; payments' webhook handlers call back into `bot.py`'s fulfillment through `webapi.py`).
-`deploy.py` and `migrate.py` are standalone tools; `perf.py`, `largefiles.py`, `util.py` are leaf libraries.
+`deploy.py`, `setup_gateway.py` and `migrate.py` are standalone tools; `perf.py`, `largefiles.py`, `util.py` are leaf libraries.
 `webapi.py` shares `bot.py`'s helpers through late imports (it runs inside the same process) and uses the
 same `store`/`remote`/`jobs` layers, so a web action and the equivalent chat action behave identically.
 

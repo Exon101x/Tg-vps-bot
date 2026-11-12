@@ -201,6 +201,12 @@ environment variables ([docs/CONFIG.md](docs/CONFIG.md#subscriptions--vps-hostin
 > idempotent. Everything is audit-logged. The UPI Gateway rides the NPCI UPI rails (INR prices);
 > CryptAPI forwards to **your own wallets** (verify the `WEBAPP_URL` domain once in their panel).
 
+Setting the gateways up is one command — `python3 setup_gateway.py` walks you through every
+method (validates each value, generates the webhook secret, live-tests the gateway and the
+webhook port, shows the webhook URL to register), `--check` re-diagnoses a running setup,
+`--write KEY=V…` scripts it, `--gen-secret` mints a secret, `--qr` renders any QR. It only ever
+touches the gateway keys in `.env` — comments and everything else survive.
+
 ## Configuration
 
 Everything is an environment variable; a `.env` file works too (real variables win). The complete
@@ -331,11 +337,12 @@ backends.py       SQLite / PostgreSQL / MySQL / MongoDB behind one interface
 session_sync.py   Telegram session snapshots + single-instance lock
 perf.py           host detection and speed profiles
 deploy.py         deployment setup wizard (stdlib only)
+setup_gateway.py  payment gateway setup: guided wizard, validator, --check diagnostics, QR test (stdlib only)
 migrate.py        copy data between databases
 healthcheck.py    Docker HEALTHCHECK helper
 Dockerfile, docker-compose.yml, render.yaml, heroku.yml, Procfile, deploy/vpsbot.service
 assets/           banner.svg (README), logo.jpg (bot avatar / app icon), banner.jpg (wide hero)
-tests/            14 check scripts run by pytest: local FTP + SSH servers, in-memory
+tests/            16 check scripts run by pytest: local FTP + SSH servers, in-memory
                   databases, 24 security + 22 big-file + 51 mini-app + 40 admin checks
 docs/             COMMANDS.md, CONFIG.md, DEPLOY.md, ARCHITECTURE.md
 ```

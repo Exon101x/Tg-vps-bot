@@ -129,6 +129,12 @@ Default catalog (all replaceable via `SUBSCRIPTION_PLANS`):
 Set any combination — each configured gateway becomes a button under **Buy** (chat and Mini App alike).
 All of them need `WEBAPP_URL` (the bot's public HTTPS address) for their webhooks to reach you.
 
+> **Quick setup**: `python3 setup_gateway.py` — a guided wizard that validates every value,
+> generates the webhook signing secret, live-tests the gateway and the webhook port, shows the
+> webhook URL to register and writes only the gateway keys to `.env` (comments and everything
+> else survive). Non-interactive: `--check` (diagnose the current setup), `--write KEY=V…`
+> (validated batch write), `--gen-secret`, `--qr "upi://pay?…"` (render any QR).
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `UPI_VPA` | unset | **Direct UPI** — your UPI id (`name@bank`). The buyer gets a `upi://pay` QR + one-tap app button; confirmation stays manual (`/paid <UTR>`) because a personal UPI id has no bank feed |

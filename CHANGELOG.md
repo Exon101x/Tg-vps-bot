@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.8.2 — gateway setup tool: one command, every gateway
+
+* **`setup_gateway.py`** — the full payment-gateway setup, one stdlib-only command next to
+  `deploy.py`. The guided wizard (`python3 setup_gateway.py`) walks through every method
+  (UPI Gateway, direct UPI, CryptAPI crypto), validates each value as it is typed
+  (UPI ids, https URLs, wallet address families per coin, numeric ranges), offers to
+  generate the webhook signing secret, live-tests what it can without creating state
+  (the gateway's merchant credentials via a harmless order lookup, the bot's webhook port
+  via `/healthz`, CryptAPI's pubkey endpoint), prints the exact webhook URL to register in
+  the gateway's dashboard and writes only the gateway keys to `.env` — comments, blanks and
+  unrelated keys survive untouched, values update in place, secrets are masked in its own
+  output. Runs before the bot exists: no database, no `SECRET_KEY`, no bot imports.
+* **Non-interactive modes**: `--check` diagnoses a running setup (method-by-method
+  ready/partial/off, missing keys, live probes, QR pipeline health; exit 1 when a
+  half-configured gateway or unreachable endpoint needs attention), `--write KEY=V…`
+  batch-writes validated values (scripted setups), `--gen-secret` mints a strong secret,
+  `--qr` renders any text as a PNG, `--env PATH` targets another file, `--no-probe` skips
+  the network. Validation is strict on purpose: typos and test values are rejected with a
+  reason, `http://` is only accepted for localhost.
+* **Tests**: `tests/check_setup.py` — 25 checks over a fake gateway that answers like the
+  real one (401 for wrong merchant credentials, 404 for right ones, `/healthz`, `/pubkey/`):
+  secret generation, batch writes (in-place updates, preservation, no duplicates, rejected
+  batches write nothing), the checker on empty/partial/full setups, wrong credentials, dead
+  gateways, QR rendering, and the wizard piped empty input.
+
 ## 1.8.1 — UPI integration moved to the author's own UPI Gateway
 
 * **The auto-verified UPI provider is now [upi-gateway](https://github.com/Exon101x/upi-gateway)**
