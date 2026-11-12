@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.8.7 — chat UI redesign: every card aligned, every keyboard a grid
+
+* **A shared formatting kit.** Four small helpers now shape everything the
+  bot prints: `kv()` renders aligned two-column rows (`label ······ value` —
+  Telegram's proportional font eats space padding, dots survive it; over-long
+  rows fall back to `label: value` instead of squeezing),
+  `kvrows()` stacks them, `head()` makes the one-line card headers with a
+  muted sub-line, `progress_line()` is the one-line bar. `/status`, `/about`,
+  `/usage`, the admin overview, `/stats` and the plan/VPS cards all use it —
+  the bot finally looks like one product instead of five writing styles.
+* **The /start card and the manual read like a product page.** Bold section
+  headers, aligned feature rows, numbered quick start; the manual pages
+  (`/help` → section buttons) group commands under bold sub-headings instead
+  of one undifferentiated wall; the hub lists one line per section. Section
+  bodies now go out as HTML (parse mode travels with `help_page`'s return,
+  so the plain-text hub and `/help all` are untouched).
+* **Keyboards became grids.** `/servers` and `/plans` buttons pair up
+  two per row (the active server's button is marked `▶️`), the VPS dashboard
+  is a clean 2×5 grid, the admin panel is 2×2. One server or one paid plan
+  still gets a full-width row.
+* **Every list card was rebuilt.** `/servers`: bold names with the
+  scheme://user@host:port in monospace under each; `/queue`: state icon,
+  bold job id, name → server, errors in italics; admin users/orders:
+  two lines per entry (identity bold, details indented); the plan approval
+  delivery to buyers (`_fulfill`) and `/add`'s success card use the same
+  card shape; `/folder`'s help shows Set/Clear/Variables/Examples as
+  grouped lines.
+* **Typography consistency**: em dashes everywhere (no more mixed `-` and
+  `—`), `·` as the intra-line separator, and the hosting guide re-indented
+  to a hanging-number layout.
+* **Pinned in `tests/check_misc.py`**: `help_page` now returns its parse
+  mode (the page carries `<b>` headers and must be sent as HTML); the kit's
+  fallback rule and the welcome card's dotted alignment have their own
+  checks.
+
 ## 1.8.6 — documentation catch-up: the docs match the code again
 
 * **Every doc refreshed against the code after the 1.8.5 state-machine work.** The

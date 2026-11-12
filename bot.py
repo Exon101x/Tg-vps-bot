@@ -141,63 +141,102 @@ MEDIA = filters.document | filters.video | filters.audio | filters.photo | filte
 # /start shows a short welcome card with buttons instead of the old wall of text.
 HELP_SECTIONS = {
     "servers": ("🔌 Servers", "add, switch, monitor, audit", """
-/add <name> <target> - save a server (becomes active)
-   ssh://user@host[:port]  (asks for password or key file)
-   ssh://user:pass@host · ftp://user:pass@host[:port][/dir] · ftps://...
-/servers - list and switch · /use <name> · /del <name>
-/status - active server info · /monitor on|off - alerts
-/audit - what was done, when and on which server"""),
+<b>Connect & manage</b>
+/add <name> <target> — save a server, it becomes active
+   ssh://user@host[:port] · ssh://user:pass@host
+   ftp://user:pass@host[:port][/dir] · ftps://…
+/servers — list & switch · /use <name> — jump to one
+/del <name> — remove (credentials erased)
+
+<b>Watch</b>
+/status — the active server's card
+/monitor on|off — resource alerts
+/audit — what was done, when, on which server"""),
     "files": ("📁 Files & transfers", "stream both ways, queue, folders", """
-Send any file: it streams straight to the server (no temp disk), is queued per server,
-retried on failures and resumed from the partial file. Albums and bulk sends are fine.
-Files up to 4 GB stream directly (the sender needs Telegram Premium above 2 GB).
-Caption "> path/name.ext" (or "> dir/") sets the destination.
-/ask on|off - when on, every file you send gets buttons to pick the destination server
-/queue - jobs · /retry [id] · /stop <id|all> · /usage - upload totals
-/folder <template> - auto folders, e.g. {user}/{date} or {type}/{year}-{month}
-/ondup overwrite|skip|rename - what to do if the file already exists
+<b>Send files</b> — they stream to the server, no temp disk; queued per
+server, retried on failure, resumed from the partial file. Albums and
+bulk sends are fine. Files up to 4 GB go directly (Premium above 2 GB).
+A caption "> path/name.ext" (or "> dir/") sets the destination.
+/ask on|off — pick the destination server per file, with buttons
+
+<b>Queue</b>
+/queue — the jobs · /retry [id] — failed ones
+/stop <id|all> · /usage — upload totals
+
+<b>Folders</b>
+/folder <template> — e.g. {user}/{date} or {type}/{year}-{month}
+/ondup overwrite|skip|rename — if the file already exists
+
+<b>Remote filesystem</b>
 /pwd · /cd <dir> · /ls [dir] · /mkdir <dir> · /mv <from> <to> · /rm <path>
-/get <path> [-v MB] - send a server file to this chat; over 2 GB it is split into .001 .002 volumes
-/join <name> [--rm] - (ssh) reassemble name.001 name.002 ... on the server
-/multi [name] ... /done - collect the volumes of a file over 4 GB (or without Premium) and upload them as ONE file to any server
-/perf - detected CPU/RAM and the speed profile in use
-/fetch <url> [name] - the server downloads a URL (ssh) or the bot streams it (ftp); no size limit
-Files over 4 GB (or over 2 GB without Premium): split them first (7-Zip volumes, or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`),
-then /multi, send all the .001 .002 ... parts, and /done: one file lands on any FTP/FTPS/SFTP server."""),
+
+<b>Download & big files</b>
+/get <path> [-v MB] — a server file to this chat; over 2 GB it
+   is split into .001 .002 volumes
+/join <name> [--rm] — (ssh) reassemble name.001 name.002 …
+/multi [name] … /done — collect volumes of a file over 4 GB
+   (or without Premium) and upload them as ONE file, anywhere
+/fetch <url> [name] — the server downloads a URL (ssh), or the
+   bot streams it (ftp); no size limit
+/perf — CPU/RAM detected, the speed profile in use
+
+Over 4 GB (or over 2 GB without Premium): split first — 7-Zip volumes,
+or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.` — then
+/multi, send the parts, /done. One file lands on any server."""),
     "vps": ("🖥 VPS & SSH", "shell, services, docker, stats", """
-/vps - dashboard buttons · /stats · /ps · /ports · /logins
-/sh <cmd> - run a command (dir is remembered) · /term - terminal mode
+<b>Dashboard</b>
+/vps — buttons for everything below
+/stats · /ps · /ports · /logins · /disk · /firewall · /failed
+
+<b>Run things</b>
+/sh <cmd> — run a command (the directory is remembered)
+/term — terminal mode: every message is a command
+
+<b>Services & containers</b>
 /service <name> [status|start|stop|restart|reload|enable|disable]
 /logs <unit> [lines] · /docker [ps|start|stop|restart|logs <name>]
-/disk · /firewall · /failed · /updates · /upgrade (apt) · /reboot
-Non-root users need passwordless sudo for service/docker/reboot actions."""),
+
+<b>System</b>
+/updates — check · /upgrade — apt upgrade · /reboot
+Non-root users need passwordless sudo for service/docker/reboot."""),
     "pay": ("💳 Plans & hosting", "more servers, or a VPS of your own", """
-Buy more servers - or a VPS of your own to host your bots on, 24/7:
-/plans - the plans · /mysub - your plan, limits and expiry · /myvps - your VPS instances
-/paid <reference> - confirm a payment (the UPI/PayPal/crypto reference)
-/hosting - the 60-second guide: your bot, running on your VPS, tonight
-UPI (checkout page, QR, any UPI app) and crypto (BTC, USDT, 100+ coins) are accepted
-when the owner set up the gateways: the Buy button takes real payments and the plan
-activates the second the money lands - no waiting, no /paid needed. Otherwise the
-reference flow above still works.
-VPS plans include SSH instances with a disk quota - buy, get credentials in
-seconds, add the VPS back as a server (/add myvps ssh://user@host) and manage
-it right from this chat (files, shell, services, the Mini App console)."""),
+<b>Shop</b>
+/plans — the catalog · /mysub — your plan & limits
+/myvps — your VPS instances · /paid <reference> — confirm a payment
+/hosting — the 60-second guide to hosting your own bot
+
+<b>Payments</b>
+UPI (checkout page, QR, any UPI app) and crypto (BTC, USDT, 100+
+coins) — when the owner set up the gateways the Buy button takes
+real payments and the plan activates the second the money lands.
+No waiting, no /paid needed. Otherwise the reference flow works.
+
+<b>VPS plans</b> include real SSH instances with a disk quota: buy,
+get credentials in seconds, add the VPS back as a server
+(/add myvps ssh://user@host) and manage it right from this chat —
+files, shell, services, the Mini App console."""),
     "app": ("📱 Mini App", "the web panel inside Telegram", """
-A web UI served by the bot itself on its health port. Sign-in is automatic: Telegram signs
-the request and the bot checks the signature, so there is no extra password. Browse files, upload
-from your phone (resumable, queued like any other upload), run shell commands, watch VPS stats -
-and the buttons appear once WEBAPP_URL points at the bot's public HTTPS address (PaaS platforms
-provide one automatically; on a plain VPS put nginx or Caddy in front for HTTPS).
-/app - open it"""),
-    "admin": ("🛠 Admin", "panel, orders, broadcast - admins only", """
-/admin - panel: overview, users and usage, orders and revenue, ban / unban, broadcast
-/admin orders - approve or decline payments (the Mini App has the same)
-The Mini App has the same panel as a tab (/app), with live cards per user."""),
+A web UI served by the bot itself, on its health port. Sign-in is
+automatic: Telegram signs the request and the bot checks the
+signature — no extra password.
+Browse files, upload from your phone (resumable, queued like any
+other upload), run shell commands, watch VPS stats.
+The buttons appear once WEBAPP_URL points at the bot's public HTTPS
+address (PaaS platforms provide one automatically; on a plain VPS
+put nginx or Caddy in front for HTTPS).
+
+/app — open it"""),
+    "admin": ("🛠 Admin", "panel, orders, broadcast — admins only", """
+<b>Panel</b>
+/admin — overview, users & usage, orders & revenue
+/admin orders — approve or decline payments
+/admin ban|unban <id> · /admin user <id> · /admin broadcast <text>
+The Mini App has the same panel as a tab (/app), with live cards
+per user."""),
     "about": ("ℹ️ About", "bot status, source, credits", """
-/about - uptime, database, active uploads, the works
-/help - this hub · /help all - the whole manual in one go
-{REPO_URL} - fork it and run your own; please keep the link in place.
+/about — uptime, database, active uploads, the works
+/help — this hub · /help all — the whole manual in one go
+{REPO_URL} — fork it and run your own; please keep the link in place.
 {DEV_LINE}"""),
 }
 
@@ -215,26 +254,27 @@ def welcome_text(first_name=""):
     who = f", {first_name[:32]}" if first_name else ""
     return f"""👋 Hi{who}!
 
-One chat for all your servers:
-📤 Stream files between Telegram and FTP · FTPS · SFTP servers
-🖥 Run your VPS over SSH: shell, services, docker, stats
-💳 Need more? Plans and hosted VPSes, right here
+<b>One chat for all your servers.</b>
 
-⚡ Quick start
-1. /add - connect a server: ssh://user@host, ftp://…, ftps://…
-2. Send a file - it uploads straight to it
-3. /vps - the SSH dashboard, with buttons
+📤 <b>Files</b> ····· stream both ways, no temp disk
+🖥 <b>VPS</b> ········· shell, services, Docker, stats
+💳 <b>More</b> ········ plans &amp; hosted VPSes, in-chat
 
-🧭 Every command: /help, or the button below."""
+⚡ <b>Quick start</b>
+<code>1</code>· /add — connect: ssh://user@host · ftp://… · ftps://…
+<code>2</code>· send a file — it uploads straight to the server
+<code>3</code>· /vps — the SSH dashboard, with buttons
+
+🧭 Every command: /help — or the buttons below."""
 
 
 def start_kb():
     """The /start card's buttons: the manual, plans, your VPS - and the Mini App as a real
     web-app button when WEBAPP_URL is live, a how-to-enable page otherwise."""
-    rows = [[Btn("🧭 Commands", callback_data="help:menu"), Btn("💾 Plans", callback_data="pl:plans")],
+    rows = [[Btn("🧭 Commands", callback_data="help:menu"), Btn("🧩 More", callback_data="pl:plans")],
             [Btn("🚀 My VPS", callback_data="pl:vps"), Btn("👤 My plan", callback_data="pl:sub")],
             [Btn("📱 Open the Mini App", web_app=WebAppInfo(url=WEBAPP_URL)) if WEBAPP_URL.startswith("https://")
-             else Btn("📱 Mini App - how to enable", callback_data="help:app")]]
+             else Btn("📱 Mini App — how to enable", callback_data="help:app")]]
     return InlineKeyboardMarkup(rows)
 
 
@@ -244,20 +284,23 @@ def help_hub(uid=None):
     items = [(k, t, b) for k, (t, b, _body) in HELP_SECTIONS.items() if k != "admin" or uid in ADMINS]
     rows = [[Btn(t, callback_data=f"help:{k}") for k, t, _b in items[i:i + 2]] for i in range(0, len(items), 2)]
     rows.append([Btn("📄 All in one message", callback_data="help:all")])
-    lines = ["🧭 Help - every command, one tap away", ""] + [f"{t} - {b}" for _k, t, b in items]
-    lines.append("\n📄 Prefer one message? The last button sends the whole manual.")
+    lines = ["🧭 Help — every command, one tap away", ""]
+    lines += [f"{t} · {b}" for _k, t, b in items]
+    lines += ["", "📄 Prefer one message? The last button sends the whole manual."]
     return "\n".join(lines), InlineKeyboardMarkup(rows)
 
 
 def help_page(key, uid=None):
     """One section of the manual as a single page with back-to-hub and back-to-start
-    buttons. Unknown keys - and the admin page for non-admins - fall back to the hub."""
+    buttons. Unknown keys - and the admin page for non-admins - fall back to the hub.
+    Returns (text, keyboard, parse_mode): section bodies carry <b> group headers, so
+    they go out as HTML; the hub is plain text."""
     sec = HELP_SECTIONS.get(key)
     if not sec or (key == "admin" and uid not in ADMINS):
-        return help_hub(uid)
+        return (*help_hub(uid), None)
     title, _blurb, body = sec
     kb = InlineKeyboardMarkup([[Btn("🧭 All sections", callback_data="help:menu"), Btn("🏠 Start", callback_data="help:home")]])
-    return help_fill(f"{title}\n\n{body.strip()}"), kb
+    return help_fill(f"{title}\n\n{body.strip()}"), kb, ParseMode.HTML
 
 
 # ---------------------------------------------------------------- helpers
@@ -359,6 +402,48 @@ def tlen(s):
 
 
 MAX_TEXT = 4000  # Telegram's hard cap is 4096 units per message; keep headroom
+
+
+# ---------------------------------------------------------------- chat formatting kit
+# One look for every card the bot prints: a bold header, aligned two-column rows
+# (label ...... value), section dividers, monospace fallbacks for machine output.
+# Telegram has no tables and no padding that survives its proportional font, so
+# alignment comes from dots / monospace blocks, never from spaces.
+
+def kv(label, value="", width=22, indent=1):
+    """One aligned row: `label ······ value`. Long labels or values (and any value with a
+    newline) fall back to `label: value` - a squeezed dotted row looks worse than no dots."""
+    label, value = str(label), str(value)
+    if not value:
+        return "  " * indent + label
+    if len(label) + len(value) + 3 > width + 18 or "\n" in value:
+        return "  " * indent + f"{label}: {value}"
+    dots = " " + "·" * max(2, width - len(label) - len(value) - 1)
+    return "  " * indent + label + dots + " " + value
+
+
+def kvrows(pairs, **kw):
+    """A block of kv() rows, one per line."""
+    return "\n".join(kv(*p, **kw) for p in pairs)
+
+
+def head(icon, title, sub=""):
+    """A card header: bold title, optional muted sub-line, blank line after."""
+    return f"{icon} {title}" + (f"\n{' ' * (len(icon) + 1)}{sub}" if sub else "")
+
+
+def bold(s):
+    return f"<b>{html.escape(s)}</b>"
+
+
+def code(s):
+    return f"<code>{html.escape(str(s))}</code>"
+
+
+def progress_line(cur, total, label=""):
+    """`label  █████░░░░ 42%` - the one-line bar used in cards and status messages."""
+    pct = min(100, cur * 100 // total) if total else 0
+    return f"{label}{' ' if label else ''}{'█' * (pct // 10)}{'░' * (10 - pct // 10)} {pct}%"
 
 
 def split_text(text, limit=MAX_TEXT):
@@ -532,14 +617,14 @@ def fmt_stats(d):
     try:
         mem_pct = int(d["mem_used"]) * 100 // int(d["mem_total"])
         lines = [
-            f"🖥 {d.get('host', '?')}  {d.get('os', '')}",
-            f"⏱ {d.get('uptime', '?')}",
-            f"⚙️ load {d.get('load', '?')}  ({d.get('cores', '?')} cores)",
-            f"🧠 RAM {d['mem_used']}/{d['mem_total']} MB ({mem_pct}%)",
-            f"💾 disk {int(d['disk_used']) / 1048576:.1f}/{int(d['disk_total']) / 1048576:.1f} GB ({d['disk_pct']})",
+            head("🖥", d.get("host", "?"), d.get("os", "")), "",
+            kvrows([("uptime", str(d.get("uptime", "?"))),
+                    ("load", f"{d.get('load', '?')}  ({d.get('cores', '?')} cores)"),
+                    ("RAM", f"{d['mem_used']}/{d['mem_total']} MB ({mem_pct}%)"),
+                    ("disk", f"{int(d['disk_used']) / 1048576:.1f}/{int(d['disk_total']) / 1048576:.1f} GB ({d['disk_pct']})")]),
         ]
         if d.get("swap_total", "0") != "0":
-            lines.append(f"🔁 swap {d['swap_used']}/{d['swap_total']} MB")
+            lines.append(kv("swap", f"{d['swap_used']}/{d['swap_total']} MB"))
         return "\n".join(lines)
     except (KeyError, ValueError, ZeroDivisionError):
         return "Could not parse stats:\n" + "\n".join(f"{k}={v}" for k, v in d.items())
@@ -634,10 +719,10 @@ async def reboot_now(msg, uid, name):
 def menu_kb():
     return InlineKeyboardMarkup([
         [Btn("📊 Stats", callback_data="q:stats"), Btn("⚙️ Processes", callback_data="q:ps")],
-        [Btn("🐳 Docker", callback_data="q:docker"), Btn("🔌 Ports", callback_data="q:ports")],
-        [Btn("🔐 Logins", callback_data="q:logins"), Btn("📦 Updates", callback_data="q:updates")],
-        [Btn("💾 Disk", callback_data="q:disk"), Btn("🛡 Firewall", callback_data="q:firewall"), Btn("🧯 Failed", callback_data="q:failed")],
-        [Btn("🔄 Reboot", callback_data="q:reboot")],
+        [Btn("🔌 Ports", callback_data="q:ports"), Btn("🔐 Logins", callback_data="q:logins")],
+        [Btn("💾 Disk", callback_data="q:disk"), Btn("🛡 Firewall", callback_data="q:firewall")],
+        [Btn("📦 Updates", callback_data="q:updates"), Btn("🧯 Failed", callback_data="q:failed")],
+        [Btn("🐳 Docker", callback_data="q:docker"), Btn("🔄 Reboot", callback_data="q:reboot")],
     ])
 
 
@@ -704,8 +789,8 @@ async def start(_, m):
     text = welcome_text(m.from_user.first_name or "")
     c = store.get_server(m.from_user.id)
     if c:  # a returning user: lead with where they left off
-        text += f"\n\n🔌 Active server: {c['name']} - /servers to switch"
-    await m.reply(text, reply_markup=start_kb())
+        text += f"\n\n🔌 Active server ··· <b>{html.escape(c['name'])}</b> — /servers to switch"
+    await m.reply(text, reply_markup=start_kb(), parse_mode=ParseMode.HTML)
 
 
 @app.on_message(auth & filters.command("help"))
@@ -766,7 +851,13 @@ async def finish_add(msg, uid, name, t, auth_kind, secret):
     store.add_server(c)
     store.log(uid, name, f"added {c['scheme']}://{c['user']}@{c['host']}:{c['port']}")
     fp = f"\n🔐 Host key pinned: {fingerprint(c['hostkey'])}\nCompare it with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server if you want to be sure." if c["hostkey"] else ""
-    await note.edit_text(f"✅ Saved '{name}' and made it active.\n{c['scheme']}://{c['user']}@{c['host']}:{c['port']}\n📂 {c['cwd'] or '/'}{fp}")
+    target_line = f"{c['scheme']}://{c['user']}@{c['host']}:{c['port']}"
+    await note.edit_text("\n".join([
+        f"✅ Saved <b>{html.escape(name)}</b> — and made it active.", "",
+        f"<code>{html.escape(target_line)}</code>",
+        f"📂 {c['cwd'] or '/'}{fp}",
+        "", "Send a file to try it · /status for the card · /vps for the dashboard",
+    ]), parse_mode=ParseMode.HTML)
 
 
 @app.on_message(auth & filters.command(["add", "addvps", "setftp"]))
@@ -822,9 +913,17 @@ async def servers(_, m):
     if not rows:
         return await m.reply(NO_SERVER)
     active = store.active_name(uid)
-    lines = [f"{'▶️' if r['name'] == active else '•'} {r['name']} - {r['scheme']}://{r['user']}@{r['host']}:{r['port']}{' 🔔' if r['monitor'] else ''}" for r in rows]
-    kb = InlineKeyboardMarkup([[Btn(r["name"], callback_data=f"use:{r['name']}")] for r in rows])
-    await m.reply("\n".join(lines) + "\n\nTap to switch:", reply_markup=kb)
+    lines = [head("🖥", "Your servers", f"{len(rows)} saved · tap a button to switch"), ""]
+    for r in rows:
+        mark = "▶️" if r["name"] == active else "⚪"
+        target = f"{r['scheme']}://{r['user']}@{r['host']}:{r['port']}"
+        lines.append(f"{mark} <b>{html.escape(r['name'])}</b>"
+                     + ("  🔔" if r["monitor"] else ""))
+        lines.append(f"   <code>{html.escape(target)}</code>")
+    kb_rows = [[Btn((("▶️ " if r["name"] == active else "") + r["name"]), callback_data=f"use:{r['name']}")
+                for r in rows[i:i + 2]] for i in range(0, len(rows), 2)]
+    lines += ["", "Tap to switch · /status for the active one's card"]
+    await m.reply("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode=ParseMode.HTML)
 
 
 @app.on_message(auth & filters.command("use"))
@@ -866,11 +965,15 @@ async def status_cmd(_, m):
     c = await need(m.from_user.id, m)
     if not c:
         return
-    text = f"{c['name']}: {c['scheme']}://{c['user']}@{c['host']}:{c['port']}\n📂 {c['cwd'] or '/'}\nauth: {c['auth']}"
+    lines = [head("🔌", f"{c['name']}", f"{c['scheme']}://{c['user']}@{c['host']}:{c['port']}"), "",
+             kvrows([("directory", c["cwd"] or "/"),
+                     ("auth", c["auth"]),
+                     ("monitoring", "on 🔔" if c["monitor"] else "off"),
+                     ("folder", c["folder"] or "(none)"),
+                     ("duplicates", c["dup"])])]
     if c["hostkey"]:
-        text += f"\n🔐 {fingerprint(c['hostkey'])}"
-    text += f"\n🔔 monitoring {'on' if c['monitor'] else 'off'}\n📁 folder: {c['folder'] or '(none)'}   ♻️ duplicates: {c['dup']}"
-    await m.reply(text)
+        lines += ["", kv("host key", fingerprint(c["hostkey"]))]
+    await m.reply("\n".join(lines))
 
 
 @app.on_message(auth & filters.command("audit"))
@@ -883,14 +986,18 @@ async def audit(_, m):
 @app.on_message(auth & filters.command("about"))
 async def about(_, m):
     up = int(time.time() - STARTED)
-    lines = ["🤖 VPS + file transfer bot", f"uptime: {up // 3600}h {up % 3600 // 60}m", f"database: {store.LABEL}",
-             f"session: {SESSION_SOURCE}", f"instance: {session_sync.INSTANCE}",
-             f"active uploads: {len(store.pending_jobs())}", describe_perf(),
-             f"source: {REPO_URL}"]
+    up_h, up_m = up // 3600, up % 3600 // 60
+    lines = [head("🤖", "VPS + file transfer bot", REPO_URL), "",
+             kvrows([("uptime", f"{up_h}h {up_m}m"),
+                     ("database", store.LABEL),
+                     ("session", SESSION_SOURCE),
+                     ("instance", session_sync.INSTANCE),
+                     ("active uploads", str(len(store.pending_jobs()))),
+                     ("profile", describe_perf())])]
     if DEV_CHANNEL:
-        lines.append(f"developer: @{DEV_CHANNEL}" + (f" (id {DEV_ID})" if DEV_ID else ""))
+        lines.append(kv("developer", f"@{DEV_CHANNEL}" + (f" (id {DEV_ID})" if DEV_ID else "")))
     if m.from_user.id in ADMINS:
-        lines.append(f"admin: yes ({len(ADMINS)} admin(s), {store.user_counts()[0]} known user(s))")
+        lines.append(kv("admin", f"yes ({len(ADMINS)} admin(s), {store.user_counts()[0]} known user(s))"))
     await m.reply("\n".join(lines))
 
 
@@ -901,39 +1008,42 @@ CURRENCY = subscriptions.CURRENCY
 def plan_card(p, current=False):
     """One plan as a compact card: badge, price, what's in it."""
     price = "free" if p.free else f"{p.price:g} {CURRENCY} / {p.days}d"
-    head = f"{'🆓' if p.free else '💠'} {p.name}" + (f" · {p.tag}" if p.tag else "") + ("  ✅ yours" if current else "")
+    head = f"{'🆓' if p.free else '💠'} <b>{html.escape(p.name)}</b>" \
+           + (f" · <i>{html.escape(p.tag)}</i>" if p.tag else "") \
+           + ("  ✅ yours" if current else "")
     lim = "∞ servers" if p.max_servers < 0 else f"{p.max_servers} servers"
     if p.vps_slots:
-        lim += f" · {p.vps_slots}x VPS ({p.vps_cpu} vCPU · {p.vps_ram} MB · {p.vps_disk} GB)"
+        lim += f" · {p.vps_slots}× VPS ({p.vps_cpu} vCPU · {p.vps_ram} MB · {p.vps_disk} GB)"
     lines = [head, f"   {price}", f"   {lim}"]
     if p.desc:
-        lines.append(f"   {p.desc}")
+        lines.append(f"   <i>{html.escape(p.desc)}</i>")
     return "\n".join(lines)
 
 
 def plans_kb():
-    rows = [[Btn(f"💠 {p.name} · {p.price:g} {CURRENCY}", callback_data=f"buy:{p.key}")]
-            for p in subscriptions.plans(paid_only=True)]
+    rows = [[Btn(f"💠 {p.name} · {p.price:g} {CURRENCY}", callback_data=f"buy:{p.key}")
+             for p in subscriptions.plans(paid_only=True)[i:i + 2]]
+            for i in range(0, len(subscriptions.plans(paid_only=True)), 2)]
     rows.append([Btn("💎 My plan", callback_data="pl:sub"), Btn("🚀 Host a bot", callback_data="pl:host")])
     return InlineKeyboardMarkup(rows)
 
 
 def plans_text(uid):
     cur = subscriptions.effective(uid)
-    lines = ["💎 Plans", ""]
+    lines = [head("💎", "Plans", "more servers · your own VPS · 24/7"), ""]
     lines += [plan_card(p, current=p.key == cur.key) for p in subscriptions.plans()]
-    lines += ["", "Free is automatic - no card, no sub. Paid tiers add more servers and VPSes of your own:",
-              "a real Linux box with SSH and a disk quota, to host your bots on, 24/7.",
-              "Tap a button to buy - approval by the owner usually takes minutes. /hosting for the guide."]
+    lines += ["", "Free is automatic — no card, no sub. Paid tiers add more servers and VPSes "
+                  "of your own: a real Linux box with SSH and a disk quota, to host your bots on.",
+              "Tap a button to buy — approval by the owner usually takes minutes. /hosting for the guide."]
     return "\n".join(lines)
 
 
 def order_text(o, p):
-    return (f"🧾 Order #{o['id']} · {p.name}\n"
+    return (f"🧾 <b>Order #{o['id']}</b> · {html.escape(p.name)}\n"
             f"   {p.price:g} {CURRENCY} / {p.days} days\n\n"
-            f"💳 How to pay:\n{subscriptions.payment_info(p)}\n\n"
-            f"When it is paid, send:\n/paid <transaction reference>\n"
-            f"(order #{o['id']} is open - it is what the reference attaches to)")
+            f"💳 <b>How to pay</b>\n{subscriptions.payment_info(p)}\n\n"
+            f"When it is paid, send:\n/paid &lt;transaction reference&gt;\n"
+            f"(order #{o['id']} is open — it is what the reference attaches to)")
 
 
 def mysub_text(uid):
@@ -941,29 +1051,30 @@ def mysub_text(uid):
     n = len(store.list_servers(uid))
     slots = store.alloc_active_count(uid)
     cap = "∞" if p.max_servers < 0 else str(p.max_servers)
-    lines = [f"💎 Your plan: {p.name}"]
+    lines = [head("💎", f"Your plan: {p.name}"), ""]
     if p.free:
-        lines += ["Free - no expiry. Upgrade any time: /plans"]
+        lines += ["Free — no expiry. Upgrade any time: /plans"]
     else:
         lines += [f"✅ active · {days} day{'s' if days != 1 else ''} left "
                   f"(until {time.strftime('%Y-%m-%d', time.gmtime(store.sub_get(uid)['expires']))})",
-                  "Renewing extends from where you are, and keeps your VPS alive - /plans"]
-    lines += [f"🖥 servers: {n} / {cap}"]
+                  "Renewing extends from where you are, and keeps your VPS alive — /plans"]
+    lines += ["", kv("servers", f"{n} / {cap}")]
     if p.vps_slots or slots:
-        lines.append(f"🚀 VPS: {slots} active" + (f" / {p.vps_slots} included" if p.vps_slots else ""))
+        lines.append(kv("VPS", f"{slots} active" + (f" / {p.vps_slots} included" if p.vps_slots else "")))
     return "\n".join(lines)
 
 
 def vps_card(a):
     days = max(0, (a["expires"] - int(time.time())) // 86400)
     state = "🟢 active" if a["status"] == "active" and a["expires"] > time.time() else f"🔴 {a['status']}"
-    lines = [f"🚀 {a['user']}@{a['host']}  ·  {state}",
-             f"   SSH port {a['port']} · {a['cpu']} vCPU · {a['ram']} MB · {a['disk']} GB"
-             + (f" · {days}d left" if a["status"] == "active" else ""),
-             f"   user: {a['user']} · password: {a['secret']}",
-             f"   included with the {subscriptions.plan(a['plan']).name if subscriptions.plan(a['plan']) else a['plan']} plan"]
+    user_host = f"{a['user']}@{a['host']}"
+    lines = [f"🚀 <b>{html.escape(user_host)}</b>  ·  {state}",
+             kvrows([("SSH port", a["port"]), ("specs", f"{a['cpu']} vCPU · {a['ram']} MB · {a['disk']} GB")]
+                    + ([("left", f"{days} days")] if a["status"] == "active" else []), indent=2),
+             kvrows([("user", a["user"]), ("password", a["secret"])], indent=2),
+             kv("plan", subscriptions.plan(a["plan"]).name if subscriptions.plan(a["plan"]) else a["plan"], indent=2)]
     if a["status"] == "active":
-        lines.append("   host a bot on it: /hosting - files go straight from this chat")
+        lines.append("   host a bot on it: /hosting — files go straight from this chat")
     return "\n".join(lines)
 
 
@@ -972,26 +1083,28 @@ def myvps_text(uid):
     if not rows:
         return ("🚀 No VPS yet.\n\nPlans with an included VPS (real SSH instances with a disk quota): /plans\n"
                 "Buy, get credentials in seconds, host your own bots on it 24/7.")
-    return "🚀 Your VPS instances\n\n" + "\n\n".join(vps_card(a) for a in rows) + "\n\nRenew before expiry to keep them: /plans"
+    return head("🚀", "Your VPS instances") + "\n\n" + "\n\n".join(vps_card(a) for a in rows) \
+        + "\n\nRenew before expiry to keep them: /plans"
 
 
-HOSTING_GUIDE = """🚀 Host your own bot on a VPS from this bot - the 60-second guide
+HOSTING_GUIDE = """🚀 Host your own bot on a VPS from this bot — the 60-second guide
 
-1️⃣ /plans - pick a plan with an included VPS, tap Buy, pay, send /paid <reference>
-2️⃣ Approved = credentials land here instantly (also /myvps anytime)
-3️⃣ Make the VPS a server here: /add myvps ssh://USER@HOST
-   (it becomes an SSH server - you never leave Telegram)
-4️⃣ Send your bot's files to this chat - they stream straight onto the VPS
-   (needs a folder? caption it "> mybot/" - or /cd, /mkdir first)
-5️⃣ Set it up and run it:
-   /sh python3 -m venv ~/venv
-   /sh ~/venv/bin/pip install -r ~/mybot/requirements.txt
-   /sh cd ~/mybot && nohup ~/venv/bin/python3 bot.py &
-   (for auto-start on reboot: a systemd unit via /service, or ask in the channel)
-6️⃣ Watch it: /stats · /ps · /logs - all from this chat
+1️⃣  /plans — pick a plan with an included VPS, tap Buy, pay,
+     send /paid <reference>
+2️⃣  Approved = credentials land here instantly (also /myvps anytime)
+3️⃣  Make the VPS a server here: /add myvps ssh://USER@HOST
+     (it becomes an SSH server — you never leave Telegram)
+4️⃣  Send your bot's files to this chat — they stream straight onto
+     the VPS (needs a folder? caption it "> mybot/" — or /cd, /mkdir)
+5️⃣  Set it up and run it:
+     /sh python3 -m venv ~/venv
+     /sh ~/venv/bin/pip install -r ~/mybot/requirements.txt
+     /sh cd ~/mybot && nohup ~/venv/bin/python3 bot.py &
+     (auto-start on reboot: a systemd unit via /service, or ask in the channel)
+6️⃣  Watch it: /stats · /ps · /logs — all from this chat
 
-That is it - your bot, on your VPS, managed from Telegram.
-No VPS yet? /plans - the VPS Starter plan has one included."""
+That is it — your bot, on your VPS, managed from Telegram.
+No VPS yet? /plans — the VPS Starter plan has one included."""
 
 
 async def notify_admins(text, kb=None):
@@ -1035,17 +1148,19 @@ async def _fulfill(o, p):
             except Exception as e:
                 notes.append(f"⚠️ VPS provisioning failed: {err(e)}")
                 break
-    text = [f"✅ {p.name} is active - until {until} ({p.days} days).", "💳 /mysub · /myvps · servers: "
-             + ("∞" if p.max_servers < 0 else str(p.max_servers))]
+    text = [f"✅ <b>{html.escape(p.name)} is active</b> — until {until} ({p.days} days).", "",
+            kvrows([("servers", "∞" if p.max_servers < 0 else str(p.max_servers)),
+                    ("until", until)]) + "\n💳 /mysub · /myvps"]
     for a in creds:
-        text += ["", "🚀 Your VPS is ready",
-                 f"Host: {a['host']} · SSH port {a['port']}",
-                 f"User: {a['user']}", f"Password: {a['secret']}",
-                 f"Spec: {a['cpu']} vCPU · {a['ram']} MB · {a['disk']} GB · until {until}",
-                 "Host your own bot on it: /hosting (files go straight from this chat)."]
+        text += ["", head("🚀", "Your VPS is ready"),
+                 kvrows([("host", a["host"]), ("SSH port", a["port"]), ("user", a["user"]),
+                         ("password", a["secret"]),
+                         ("specs", f"{a['cpu']} vCPU · {a['ram']} MB · {a['disk']} GB"),
+                         ("until", until)], indent=2),
+                 "   Host your own bot on it: /hosting (files go straight from this chat)."]
     text += notes + ["", "Renew before it ends to keep everything: /plans (it extends from where you are)."]
     try:
-        await app.send_message(o["uid"], "\n".join(text))
+        await app.send_message(o["uid"], "\n".join(text), parse_mode=ParseMode.HTML)
     except Exception:
         pass
 
@@ -1081,20 +1196,20 @@ async def gateway_note(oid, text):
 
 @app.on_message(auth & filters.command(["plans", "pricing"]))
 async def plans_cmd(_, m):
-    await reply_long(m, plans_text(m.from_user.id), reply_markup=plans_kb())
+    await reply_long(m, plans_text(m.from_user.id), reply_markup=plans_kb(), parse_mode=ParseMode.HTML)
 
 
 @app.on_message(auth & filters.command(["mysub", "mysubscription"]))
 async def mysub_cmd(_, m):
     kb = InlineKeyboardMarkup([[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]])
-    await reply_long(m, mysub_text(m.from_user.id), reply_markup=kb)
+    await reply_long(m, mysub_text(m.from_user.id), reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
 @app.on_message(auth & filters.command("myvps"))
 async def myvps_cmd(_, m):
     kb = InlineKeyboardMarkup([[Btn("💎 Plans", callback_data="pl:plans")]]) \
         if not store.alloc_list(m.from_user.id) else None
-    await reply_long(m, myvps_text(m.from_user.id), reply_markup=kb)
+    await reply_long(m, myvps_text(m.from_user.id), reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
 @app.on_message(auth & filters.command("paid"))
@@ -1162,26 +1277,45 @@ def admin_overview_text():
     up = now - int(STARTED)
     stage_files, stage_bytes = webapi.staging_stats()
     lines = [
-        "👑 Admin panel",
-        f"⏱ uptime {up // 3600}h {up % 3600 // 60}m · 🗄 {store.LABEL} · session: {SESSION_SOURCE}",
-        f"👥 users: {users_total} known ({users_banned} banned) · allowed list: {len(ALLOWED)}",
-        f"🖥 servers: {servers} ({monitored} monitored)",
-        f"📦 uploads: {states.get('done', 0)} done ({human(done_b)}) · today {day_n} ({human(day_b)})",
-        f"   queued {states.get('queued', 0)} · running {states.get('running', 0)} · failed {states.get('failed', 0)}",
-        f"📂 app staging: {stage_files} file(s), {human(stage_bytes)}",
-        f"🔒 force-sub: {FORCE_SUB_LABEL or 'off'} · 📱 Mini App: {WEBAPP_URL or 'off'}",
+        head("👑", "Admin panel"), "",
+        kvrows([("uptime", f"{up // 3600}h {up % 3600 // 60}m"),
+                ("database", store.LABEL),
+                ("session", SESSION_SOURCE)]),
+        "",
+        head("👥", "Users"),
+        kvrows([("known", f"{users_total} ({users_banned} banned)"),
+                ("allowed list", str(len(ALLOWED)))]),
+        "",
+        head("🖥", "Servers"),
+        kvrows([("saved", f"{servers} ({monitored} monitored)")]),
+        "",
+        head("📦", "Uploads"),
+        kvrows([("done", f"{states.get('done', 0)} ({human(done_b)})"),
+                ("today", f"{day_n} ({human(day_b)})"),
+                ("queued / running", f"{states.get('queued', 0)} / {states.get('running', 0)}"),
+                ("failed", str(states.get('failed', 0))),
+                ("app staging", f"{stage_files} file(s), {human(stage_bytes)}")]),
+        "",
+        kvrows([("force-sub", FORCE_SUB_LABEL or "off"),
+                ("Mini App", WEBAPP_URL or "off")]),
     ]
     st = subscriptions.stats()
     per_plan = ", ".join(f"{subscriptions.plan(k).name if subscriptions.plan(k) else k} {v}"
                          for k, v in st["per_plan"].items() if v) or "none"
-    lines += [f"💳 subs: {st['subs_active']} active ({per_plan}) · revenue {st['revenue']} · "
-              f"orders: {st['orders'].get('awaiting', 0)} awaiting / {st['orders'].get('pending', 0)} pending",
-              f"🚀 VPS: {st['vps_active']} active / {st['vps_total']} total · host node: "
-              + ("configured" if hosting.configured() else "NOT configured (set VPS_NODE_HOST - VPS plans need it)")]
+    lines += ["",
+              head("💳", "Subscriptions"),
+              kvrows([("active", f"{st['subs_active']} ({per_plan})"),
+                      ("revenue", st["revenue"]),
+                      ("orders", f"{st['orders'].get('awaiting', 0)} awaiting / {st['orders'].get('pending', 0)} pending")]),
+              "",
+              head("🚀", "VPS"),
+              kvrows([("instances", f"{st['vps_active']} active / {st['vps_total']} total"),
+                      ("host node", "configured" if hosting.configured()
+                       else "NOT configured (set VPS_NODE_HOST — VPS plans need it)")])]
     top = store.top_users(5)
     if top:
         known = {r["uid"]: r for r in store.users(500)}
-        lines.append("📈 top users:")
+        lines += ["", head("📈", "Top users")]
         for u, n, b in top:
             who = known.get(u) or {}
             name = ("@" + who["username"]) if who.get("username") else (who.get("name") or str(u))
@@ -1195,12 +1329,13 @@ def admin_users_text():
     if not known:
         return "No known users yet - they appear when someone /start's the bot or opens the Mini App."
     top = {u: (n, b) for u, n, b in store.top_users(1000)}
-    lines = [f"👥 {len(known)} known user(s)"]
+    lines = [head("👥", "Known users", f"{len(known)} shown · newest first"), ""]
     for r in known:
         who = ("@" + r["username"]) if r.get("username") else (r.get("name") or str(r["uid"]))
         n, b = top.get(r["uid"], (0, 0))
         seen = time.strftime("%m-%d %H:%M", time.gmtime(r.get("last_seen") or 0))
-        lines.append(f"{'⛔' if r.get('banned') else '•'} {who} ({r['uid']}) - {n} upload(s), {human(b)}, last seen {seen}")
+        lines.append(f"{'⛔' if r.get('banned') else '•'} <b>{html.escape(who)}</b> ({r['uid']})")
+        lines.append(f"   {n} uploads · {human(b)} · last seen {seen}")
     lines.append("\nDetail: /admin user <id> · ban: /admin ban <id>")
     return "\n".join(lines)
 
@@ -1212,21 +1347,24 @@ def admin_user_text(uid):
     who = ("@" + r["username"]) if r.get("username") else (r.get("name") or str(uid))
     u = store.usage(uid)
     lines = [
-        f"👤 {who} ({uid})" + (" ⛔ BANNED" if r.get("banned") else ""),
-        f"joined {time.strftime('%Y-%m-%d', time.gmtime(r.get('joined') or 0))} · last seen "
-        f"{time.strftime('%m-%d %H:%M', time.gmtime(r.get('last_seen') or 0))}",
-        f"uploads: {u['today'][0]} today ({human(u['today'][1])}) · {u['week'][0]} in 7 days ({human(u['week'][1])})",
-        f"waiting/running: {u['pending']} · failed: {u['failed']}",
+        head("👤", f"{who} ({uid})" + ("  ⛔ BANNED" if r.get("banned") else "")), "",
+        kvrows([("joined", time.strftime("%Y-%m-%d", time.gmtime(r.get("joined") or 0))),
+                ("last seen", time.strftime("%m-%d %H:%M", time.gmtime(r.get("last_seen") or 0))),
+                ("uploads today", f"{u['today'][0]} ({human(u['today'][1])})"),
+                ("uploads 7 days", f"{u['week'][0]} ({human(u['week'][1])})"),
+                ("waiting / running", str(u["pending"])),
+                ("failed", str(u["failed"]))]),
     ]
     servers = store.list_servers(uid)
     if servers:
-        lines.append("servers: " + ", ".join(f"{s['name']} ({s['scheme']}://{s['host']})" for s in servers))
+        lines += ["", head("🖥", "Servers")]
+        lines += [f"   • {s['name']} ({s['scheme']}://{s['host']})" for s in servers]
     else:
-        lines.append("servers: none")
+        lines += ["", kv("servers", "none")]
     acts = store.recent_log(uid, 8)
     if acts:
-        lines.append("recent actions:\n" + "\n".join(
-            f"  {time.strftime('%m-%d %H:%M', time.gmtime(a['ts']))} [{a['server']}] {a['action']}" for a in acts))
+        lines += ["", head("🕒", "Recent actions")]
+        lines += [f"   {time.strftime('%m-%d %H:%M', time.gmtime(a['ts']))} [{a['server']}] {a['action']}" for a in acts]
     return "\n".join(lines)
 
 
@@ -1234,16 +1372,17 @@ def admin_orders_text():
     rows = store.orders_pending(15)
     if not rows:
         return "🧾 No open orders. They appear here (and in your chat) the moment a buyer sends /paid."
-    lines = ["🧾 Open orders (newest first)"]
+    lines = [head("🧾", "Open orders", "newest first · tap the buttons to decide"), ""]
     for o in rows:
         p = subscriptions.plan(o["plan"])
         known = store.user(o["uid"]) or {}
         who = ("@" + known["username"]) if known.get("username") else (known.get("name") or str(o["uid"]))
         state = "🟡 awaiting approval" if o["status"] == "awaiting" else "⚪ waiting for payment"
-        lines.append(f"#{o['id']} 👤 {who} ({o['uid']}) · 💠 {p.name if p else o['plan']} · "
-                     f"{o['cents'] / 100:g} {o['currency']} · {state}"
-                     + (f"\n   ref: {o['ref']}" if o["ref"] else ""))
-    lines.append("\nTap the buttons to decide an awaiting order - /admin orders refreshes.")
+        lines.append(f"<b>#{o['id']}</b> {html.escape(who)} ({o['uid']})")
+        lines.append(f"   {p.name if p else o['plan']} · {o['cents'] / 100:g} {o['currency']} · {state}")
+        if o["ref"]:
+            lines.append(f"   ref: <code>{html.escape(o['ref'])}</code>")
+    lines.append("\n/admin orders refreshes · the buttons decide an awaiting order")
     return "\n".join(lines)
 
 
@@ -1263,18 +1402,17 @@ async def admin_cmd(_, m):
     head, _, rest = arg.partition(" ")
     head = head.lower()
     if not arg:
-        kb = InlineKeyboardMarkup([[Btn("📊 Refresh", callback_data="adm:overview")],
-                                   [Btn("👥 Users", callback_data="adm:users")],
-                                   [Btn("🧾 Orders", callback_data="adm:orders")]])
-        return await reply_long(m, admin_overview_text(), reply_markup=kb)
+        kb = InlineKeyboardMarkup([[Btn("📊 Overview", callback_data="adm:overview"), Btn("🔄 Refresh", callback_data="adm:overview")],
+                                   [Btn("👥 Users", callback_data="adm:users"), Btn("🧾 Orders", callback_data="adm:orders")]])
+        return await reply_long(m, admin_overview_text(), reply_markup=kb, parse_mode=ParseMode.HTML)
     if head == "overview":
-        return await reply_long(m, admin_overview_text())
+        return await reply_long(m, admin_overview_text(), parse_mode=ParseMode.HTML)
     if head == "users":
-        return await reply_long(m, admin_users_text())
+        return await reply_long(m, admin_users_text(), parse_mode=ParseMode.HTML)
     if head == "orders":
-        return await reply_long(m, admin_orders_text(), reply_markup=admin_orders_kb())
+        return await reply_long(m, admin_orders_text(), reply_markup=admin_orders_kb(), parse_mode=ParseMode.HTML)
     if head == "user" and rest.strip().lstrip("-").isdigit():
-        return await m.reply(admin_user_text(int(rest.strip())))
+        return await m.reply(admin_user_text(int(rest.strip())), parse_mode=ParseMode.HTML)
     if head in ("ban", "unban") and rest.strip().lstrip("-").isdigit():
         target = int(rest.strip())
         if target in ADMINS:
@@ -1574,7 +1712,8 @@ async def fetch(_, m):
 async def vps(_, m):
     c = await need(m.from_user.id, m, ssh=True)
     if c:
-        await m.reply(f"🖥 {c['name']} ({c['user']}@{c['host']})", reply_markup=menu_kb())
+        await m.reply(head("🖥", c["name"], f"{c['user']}@{c['host']} · everything one tap away"),
+                      reply_markup=menu_kb())
 
 
 @app.on_message(auth & filters.command("stats"))
@@ -1856,16 +1995,17 @@ async def queue_cmd(_, m):
     rows = store.list_jobs(m.from_user.id, limit=15)
     if not rows:
         return await m.reply("Nothing queued yet. Send me a file.")
-    lines = []
+    lines = [head("📋", "Upload queue", f"{len(rows)} shown · newest first"), ""]
     for j in rows:
-        line = f"{ICON.get(j['state'], '•')} #{j['id']} {j['name']} → {j['server']}" + (f" ({human(j['size'])})" if j["size"] else "")
+        icon = ICON.get(j["state"], "•")
+        size = f" · {human(j['size'])}" if j["size"] else ""
+        lines.append(f"{icon} <b>#{j['id']}</b> {html.escape(j['name'])} → {html.escape(j['server'])}{size}")
         if j["state"] in ("queued", "running") and j["attempts"] > 1:
-            line += f"  [attempt {j['attempts']}]"
+            lines[-1] += f"  <i>(attempt {j['attempts']})</i>"
         if j["state"] == "failed" and j["error"]:
-            line += f"\n      {j['error'][:100]}"
-        lines.append(line)
+            lines.append(f"      <i>{html.escape(j['error'][:100])}</i>")
     kb = InlineKeyboardMarkup([[Btn("↻ Retry failed", callback_data="jr:all"), Btn("✖ Stop all", callback_data="js:all")]])
-    await m.reply("\n".join(lines), reply_markup=kb)
+    await m.reply("\n".join(lines), reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
 @app.on_message(auth & filters.command("retry"))
@@ -1883,10 +2023,13 @@ async def stop_cmd(_, m):
 @app.on_message(auth & filters.command("usage"))
 async def usage_cmd(_, m):
     u = store.usage(m.from_user.id)
-    await m.reply(
-        f"📈 Uploads\ntoday: {u['today'][0]} files, {human(u['today'][1])}\nlast 7 days: {u['week'][0]} files, {human(u['week'][1])}\n"
-        f"waiting/running: {u['pending']}   failed: {u['failed']}"
-    )
+    await m.reply("\n".join([
+        head("📈", "Your uploads"), "",
+        kvrows([("today", f"{u['today'][0]} files · {human(u['today'][1])}"),
+                ("last 7 days", f"{u['week'][0]} files · {human(u['week'][1])}"),
+                ("waiting / running", str(u["pending"])),
+                ("failed", str(u["failed"]))]),
+    ]))
 
 
 @app.on_message(auth & filters.command("folder"))
@@ -1898,12 +2041,16 @@ async def folder_cmd(_, m):
     arg = arg_text(m)
     if not arg:
         return await m.reply(
-            f"Folder template for {c['name']}: {c['folder'] or '(none, files go to the current directory)'}\n\n"
-            "Set: /folder <template>   Clear: /folder off\n"
-            "Variables: {user} {uid} {date} {year} {month} {day} {type} {ext}\n"
-            "Examples: /folder {user}/{date}   ·   /folder backups/{type}   ·   /folder /uploads/{user}\n"
-            "A caption like \"> some/dir/\" on a file overrides it."
-        )
+            "\n".join([head("📁", f"Folder template — {c['name']}"), "",
+                       kv("current", c["folder"] or "(none, files go to the current directory)"), "",
+                       "Set · /folder <template>", "Clear · /folder off", "",
+                       "Variables: {user} {uid} {date} {year} {month} {day} {type} {ext}",
+                       "Examples:",
+                       "   /folder {user}/{date}",
+                       "   /folder backups/{type}",
+                       "   /folder /uploads/{user}",
+                       "",
+                       'A caption like "> some/dir/" on a file overrides it.']))
     if arg.lower() == "off":
         store.update(uid, c["name"], folder="")
         return await m.reply("Folder template cleared.")
@@ -1991,17 +2138,17 @@ async def on_callback(_, cq):
     if kind == "help":  # the /start card and the /help hub navigation
         await cq.answer()
         if arg == "home":
-            text, kb = welcome_text(cq.from_user.first_name or ""), start_kb()
+            text, kb, pm = welcome_text(cq.from_user.first_name or ""), start_kb(), ParseMode.HTML
         elif arg == "all":
             return await reply_long(msg, HELP)
         else:
-            text, kb = help_page(arg, uid)
+            text, kb, pm = help_page(arg, uid)
         try:
-            await msg.edit_text(text, reply_markup=kb)
+            await msg.edit_text(text, reply_markup=kb, **({"parse_mode": pm} if pm else {}))
         except MessageNotModified:  # tapping the button of the page you are on is not an error
             pass
         except Exception:  # the card is gone (deleted or too old): send a fresh one
-            await msg.reply(text, reply_markup=kb)
+            await msg.reply(text, reply_markup=kb, **({"parse_mode": pm} if pm else {}))
         return
     if kind == "use":
         ok = store.set_active(uid, arg)
@@ -2055,7 +2202,7 @@ async def on_callback(_, cq):
         opts = payments.methods(p)
         if not opts:  # no gateway configured: the assisted flow with PAYMENT_INFO
             await cq.answer()
-            return await msg.edit_text(order_text(o, p))
+            return await msg.edit_text(order_text(o, p), parse_mode=ParseMode.HTML)
         rows = [[Btn(m["label"], callback_data=f"pay:{o['id']}:{m['key']}")] for m in opts]
         rows.append([Btn("🧾 Paid another way? Send the reference", callback_data="pl:ref")])
         await cq.answer()
@@ -2119,12 +2266,13 @@ async def on_callback(_, cq):
     if kind == "pl":  # the plans / hosting buttons on several screens
         await cq.answer()
         if arg == "plans":
-            return await reply_long(msg, plans_text(uid), reply_markup=plans_kb())
+            return await reply_long(msg, plans_text(uid), reply_markup=plans_kb(), parse_mode=ParseMode.HTML)
         if arg == "sub":
             return await reply_long(msg, mysub_text(uid), reply_markup=InlineKeyboardMarkup(
-                [[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]]))
+                [[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]]),
+                parse_mode=ParseMode.HTML)
         if arg == "vps":
-            return await reply_long(msg, myvps_text(uid))
+            return await reply_long(msg, myvps_text(uid), parse_mode=ParseMode.HTML)
         if arg == "host":
             return await reply_long(msg, HOSTING_GUIDE, reply_markup=InlineKeyboardMarkup(
                 [[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]]))
@@ -2152,9 +2300,9 @@ async def on_callback(_, cq):
     if kind == "adm" and uid in ADMINS:  # the /admin panel's buttons
         await cq.answer()
         if arg == "overview":
-            return await reply_long(msg, admin_overview_text())
+            return await reply_long(msg, admin_overview_text(), parse_mode=ParseMode.HTML)
         if arg == "users":
-            return await reply_long(msg, admin_users_text())
+            return await reply_long(msg, admin_users_text(), parse_mode=ParseMode.HTML)
 
 
 # ---------------------------------------------------------------- monitoring

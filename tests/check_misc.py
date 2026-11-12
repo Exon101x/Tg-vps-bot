@@ -108,13 +108,27 @@ ok(set(flat(hub_kb)) == {f"help:{k}" for k in bot.HELP_SECTIONS if k != "admin"}
 bot.ADMINS.add(7)
 ok("help:admin" in flat(bot.help_hub(7)[1]) and "help:admin" not in flat(bot.help_hub(8)[1]),
    "the admin section shows for admins only")
-page_text, page_kb = bot.help_page("files", 42)
+page_text, page_kb, page_pm = bot.help_page("files", 42)
 ok(page_text.startswith("📁 Files") and set(flat(page_kb)) == {"help:menu", "help:home"},
    "a section page has its title plus back-to-hub and back-to-start buttons")
+ok(page_pm is bot.ParseMode.HTML and "<b>" in page_text,
+   "a section page renders its group headers as HTML (and says so via its parse mode)")
 ok(bot.help_page("nosuch", 42)[0] == bot.help_hub(42)[0], "an unknown section button falls back to the hub")
 ok(bot.help_page("admin", 8)[0] == bot.help_hub(8)[0] and bot.help_page("admin", 7)[0] != bot.help_hub(7)[0],
    "the admin page: admins get the page, everyone else the hub")
 ok({"help:menu", "pl:plans", "pl:vps", "pl:sub"} <= set(flat(bot.start_kb())),
    "the /start card links the manual hub, plans, my VPS and my plan")
+ok("<b>" in bot.welcome_text("") and "··" in bot.welcome_text(""),
+   "the /start card uses bold headers and dotted alignment")
+
+# ---------------------------------------------------------------- the formatting kit
+ok(bot.kv("uptime", "3h 20m").count("·") >= 2 and "uptime" in bot.kv("uptime", "3h 20m"),
+   "kv(): label and dotted leaders on one line")
+ok("a very much too long label here indeed" in bot.kv("a very much too long label here indeed", "x")
+   and ":" in bot.kv("a very much too long label here indeed", "x"),
+   "kv(): an over-long label falls back to `label: value`")
+ok(bot.kvrows([("a", "1"), ("b", "2")]).count("\n") == 1, "kvrows(): one row per line")
+ok(all("···" not in bot.kv(k, v) or len(bot.kv(k, v)) < 60 for k, v in (("uptime", "3h 20m"), ("db", "sqlite: memory"))),
+   "kv(): rows stay compact")
 
 print("ALL MISC PASSED")
