@@ -8,9 +8,10 @@
 All backends expose the same small interface (see SQLBackend); rows are plain dicts.
 """
 import os
+import time
 from urllib.parse import urlparse
 
-TABLES = ("servers", "active", "audit", "jobs", "kv")
+TABLES = ("servers", "active", "audit", "jobs", "kv", "users")
 ACTIVE_STATES = ("queued", "running")
 
 
@@ -91,6 +92,13 @@ class SQLBackend:
                 Index("ix_jobs_uid_state", "uid", "state"),
             ),
             "kv": Table("kv", md, Column("k", String(64), primary_key=True), Column("v", Text)),
+            "users": Table(
+                "users", md,
+                Column("uid", BigInteger, primary_key=True, autoincrement=False),
+                Column("name", String(128), server_default=""), Column("username", String(64), server_default=""),
+                Column("joined", BigInteger, server_default="0"), Column("last_seen", BigInteger, server_default="0"),
+                Column("banned", Integer, server_default="0"),
+            ),
         }
         md.create_all(self.engine)
         self._migrate()
@@ -148,6 +156,15 @@ class SQLBackend:
         from sqlalchemy import select
         t = self.t["servers"]
         return self._all(select(t).where(t.c.monitor == 1))
+
+    def server_counts(self):
+        """(number of servers, number with monitoring on) across all users."""
+        from sqlalchemy import func, select
+        t = self.t["servers"]
+        with self.engine.connect() as c:
+            total = c.execute(select(func.count()).select_from(t)).scalar()
+            mon = c.execute(select(func.count()).select_from(t).where(t.c.monitor == 1)).scalar()
+        return int(total), int(mon)
 
     # ---- active server per user
     def active_get(self, uid):
@@ -235,6 +252,34 @@ class SQLBackend:
         with self.engine.begin() as c:
             c.execute(delete(t).where(t.c.state.in_(["done", "cancelled"]), t.c.updated < before))
 
+    def jobs_by_user(self, states, limit):
+        """[(uid, number of jobs, total bytes)] per user, biggest movers first (admin panel)."""
+        from sqlalchemy import func, select
+        t = self.t["jobs"]
+        q = (select(t.c.uid, func.count(), func.coalesce(func.sum(t.c.size), 0))
+             .where(t.c.state.in_(list(states))).group_by(t.c.uid)
+             .order_by(func.coalesce(func.sum(t.c.size), 0).desc()).limit(limit))
+        with self.engine.connect() as c:
+            return [(int(a), int(b), int(s)) for a, b, s in c.execute(q).all()]
+
+    def jobs_totals(self, states, since=None):
+        """(number of jobs, total bytes) across all users."""
+        from sqlalchemy import func, select
+        t = self.t["jobs"]
+        q = select(func.count(), func.coalesce(func.sum(t.c.size), 0)).where(t.c.state.in_(list(states)))
+        if since is not None:
+            q = q.where(t.c.updated >= since)
+        with self.engine.connect() as c:
+            n, b = c.execute(q).one()
+        return int(n), int(b)
+
+    def jobs_state_counts(self):
+        """{state: number of jobs} across all users (queued, running, done, failed, ...)."""
+        from sqlalchemy import func, select
+        t = self.t["jobs"]
+        with self.engine.connect() as c:
+            return {s: int(n) for s, n in c.execute(select(t.c.state, func.count()).group_by(t.c.state)).all()}
+
     # ---- key/value (session snapshot, ...)
     def kv_get(self, k):
         from sqlalchemy import select
@@ -248,6 +293,48 @@ class SQLBackend:
         with self.engine.begin() as c:
             c.execute(delete(t).where(t.c.k == k))
             c.execute(insert(t).values(k=k, v=v))
+
+    # ---- users (admin panel: who uses the bot, who is banned)
+    def user_upsert(self, uid, name="", username=""):
+        """First sight: insert with joined=now. Later: refresh name/username/last_seen; keep joined and banned."""
+        from sqlalchemy import insert, update
+        t = self.t["users"]
+        now = int(time.time())
+        vals = {"last_seen": now}
+        if name:
+            vals["name"] = name[:128]
+        if username:
+            vals["username"] = username[:64]
+        with self.engine.begin() as c:
+            r = c.execute(update(t).where(t.c.uid == uid).values(**vals))
+            if r.rowcount == 0:
+                c.execute(insert(t).values(uid=uid, name=(name or "")[:128], username=(username or "")[:64],
+                                         joined=now, last_seen=now, banned=0))
+
+    def user_get(self, uid):
+        from sqlalchemy import select
+        t = self.t["users"]
+        return self._one(select(t).where(t.c.uid == uid))
+
+    def user_list(self, limit):
+        from sqlalchemy import select
+        t = self.t["users"]
+        return self._all(select(t).order_by(t.c.last_seen.desc()).limit(limit))
+
+    def user_ban(self, uid, flag):
+        from sqlalchemy import update
+        t = self.t["users"]
+        with self.engine.begin() as c:
+            c.execute(update(t).where(t.c.uid == uid).values(banned=1 if flag else 0))
+
+    def user_counts(self):
+        """(total users, banned users)."""
+        from sqlalchemy import func, select
+        t = self.t["users"]
+        with self.engine.connect() as c:
+            total = c.execute(select(func.count()).select_from(t)).scalar()
+            banned = c.execute(select(func.count()).select_from(t).where(t.c.banned == 1)).scalar()
+        return int(total), int(banned)
 
     # ---- bulk copy (migrate.py)
     def dump(self):
@@ -302,6 +389,14 @@ class MongoBackend:
         d["id"] = d.pop("_id")
         return d
 
+    @staticmethod
+    def _user(doc):
+        if doc is None:
+            return None
+        d = dict(doc)
+        d["uid"] = d.pop("_id")
+        return d
+
     # ---- servers
     def server_get(self, uid, name):
         return self._clean(self.c["servers"].find_one({"uid": uid, "name": name}))
@@ -320,6 +415,11 @@ class MongoBackend:
 
     def server_monitored(self):
         return [self._clean(d) for d in self.c["servers"].find({"monitor": 1})]
+
+    def server_counts(self):
+        total = self.c["servers"].count_documents({})
+        mon = self.c["servers"].count_documents({"monitor": 1})
+        return int(total), int(mon)
 
     # ---- active server per user
     def active_get(self, uid):
@@ -380,6 +480,24 @@ class MongoBackend:
     def jobs_purge(self, before):
         self.c["jobs"].delete_many({"state": {"$in": ["done", "cancelled"]}, "updated": {"$lt": before}})
 
+    def jobs_by_user(self, states, limit):
+        r = list(self.c["jobs"].aggregate([
+            {"$match": {"state": {"$in": list(states)}}},
+            {"$group": {"_id": "$uid", "n": {"$sum": 1}, "b": {"$sum": "$size"}}},
+            {"$sort": {"b": -1}}, {"$limit": limit}]))
+        return [(int(d["_id"]), int(d["n"]), int(d["b"])) for d in r]
+
+    def jobs_totals(self, states, since=None):
+        q = {"state": {"$in": list(states)}}
+        if since is not None:
+            q["updated"] = {"$gte": since}
+        r = list(self.c["jobs"].aggregate([{"$match": q}, {"$group": {"_id": None, "n": {"$sum": 1}, "b": {"$sum": "$size"}}}]))
+        return (int(r[0]["n"]), int(r[0]["b"])) if r else (0, 0)
+
+    def jobs_state_counts(self):
+        r = list(self.c["jobs"].aggregate([{"$group": {"_id": "$state", "n": {"$sum": 1}}}]))
+        return {d["_id"]: int(d["n"]) for d in r}
+
     # ---- key/value
     def kv_get(self, k):
         d = self.c["kv"].find_one({"_id": k})
@@ -388,11 +506,39 @@ class MongoBackend:
     def kv_set(self, k, v):
         self.c["kv"].replace_one({"_id": k}, {"_id": k, "v": v}, upsert=True)
 
+    # ---- users
+    def user_upsert(self, uid, name="", username=""):
+        now = int(time.time())
+        d = self.c["users"].find_one({"_id": uid})
+        if not d:
+            self.c["users"].insert_one({"_id": uid, "name": (name or "")[:128], "username": (username or "")[:64],
+                                        "joined": now, "last_seen": now, "banned": 0})
+        else:
+            upd = {"last_seen": now}
+            if name:
+                upd["name"] = name[:128]
+            if username:
+                upd["username"] = username[:64]
+            self.c["users"].update_one({"_id": uid}, {"$set": upd})
+
+    def user_get(self, uid):
+        return self._user(self.c["users"].find_one({"_id": uid}))
+
+    def user_list(self, limit):
+        return [self._user(d) for d in self.c["users"].find({}).sort("last_seen", -1).limit(limit)]
+
+    def user_ban(self, uid, flag):
+        self.c["users"].update_one({"_id": uid}, {"$set": {"banned": 1 if flag else 0}})
+
+    def user_counts(self):
+        return int(self.c["users"].count_documents({})), int(self.c["users"].count_documents({"banned": 1}))
+
     # ---- bulk copy
     def dump(self):
         out = {n: [self._clean(d) for d in self.c[n].find({})] for n in ("servers", "active", "audit")}
         out["jobs"] = [self._job(d) for d in self.c["jobs"].find({})]
         out["kv"] = [{"k": d["_id"], "v": d["v"]} for d in self.c["kv"].find({})]
+        out["users"] = [self._user(d) for d in self.c["users"].find({})]
         return out
 
     def is_populated(self):
@@ -415,3 +561,10 @@ class MongoBackend:
             self.counters.replace_one({"_id": "jobs"}, {"_id": "jobs", "n": max(d["_id"] for d in docs)}, upsert=True)
         if data.get("kv"):
             self.c["kv"].insert_many([{"_id": r["k"], "v": r["v"]} for r in data["kv"]])
+        if data.get("users"):
+            docs = []
+            for r in data["users"]:
+                d = dict(r)
+                d["_id"] = d.pop("uid")
+                docs.append(d)
+            self.c["users"].insert_many(docs)

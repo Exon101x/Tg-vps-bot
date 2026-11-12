@@ -4,6 +4,11 @@ Telegram bot: file transfer (FTP / FTPS / SFTP) + VPS management over SSH.
 Env vars (see env.example):
   API_ID, API_HASH, BOT_TOKEN, SECRET_KEY, ALLOWED_USERS
   optional: MONITOR_INTERVAL (s, default 300), DISK_ALERT (%, 90), MEM_ALERT (%, 90), MAX_FETCH_MB (2048)
+  admin / community: ADMINS, DEV_ID (admin panel + force-sub exemptions), DEV_CHANNEL (credit),
+  FORCE_SUB (channel users must join first), WEB_RATE (Mini App requests per minute)
+
+Source: https://github.com/Exon101x/Tg-vps-bot - fork it, run your own, keep the link so
+others can find this. Developer credit: DEV_CHANNEL.
 """
 import asyncio
 import html
@@ -26,7 +31,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # a local .env file can configure everything; real environment variables win
 
-from pyrogram import Client, filters, idle  # noqa: E402
+from pyrogram import Client, ContinuePropagation, filters, idle  # noqa: E402
 from pyrogram.enums import ParseMode
 from pyrogram.errors import AuthKeyDuplicated, Unauthorized
 from pyrogram.types import BotCommand, InlineKeyboardButton as Btn, InlineKeyboardMarkup, MenuButtonWebApp, WebAppInfo
@@ -60,6 +65,28 @@ for _uid in os.getenv("ALLOWED_USERS", "").replace(" ", "").split(","):
         logging.warning("Ignoring non-numeric ALLOWED_USERS entry %r", _uid)
 if not ALLOWED:
     raise SystemExit("Set ALLOWED_USERS. The bot stores credentials and can run commands on your servers, so it must not be public.")
+
+# ---- admin / community (all optional)
+DEV_ID = env_int("DEV_ID", 0)                     # the developer's Telegram id: admin + exempt from FORCE_SUB
+ADMINS = set()
+for _uid in os.getenv("ADMINS", "").replace(" ", "").split(","):
+    if not _uid:
+        continue
+    try:
+        ADMINS.add(int(_uid))
+    except ValueError:
+        logging.warning("Ignoring non-numeric ADMINS entry %r", _uid)
+if DEV_ID:
+    ADMINS.add(DEV_ID)
+DEV_CHANNEL = os.getenv("DEV_CHANNEL", "").strip().lstrip("@")   # shown as the developer credit
+REPO_URL = "https://github.com/Exon101x/Tg-vps-bot"               # kept in the UI for people who fork
+FORCE_SUB = os.getenv("FORCE_SUB", "").strip()                   # channel the users must join to use the bot
+if FORCE_SUB.startswith("https://t.me/"):
+    FORCE_SUB = FORCE_SUB.rsplit("/", 1)[-1].strip("/")           # a full link works too
+FORCE_SUB = FORCE_SUB.lstrip("@")
+FORCE_SUB_LABEL = ("@" + FORCE_SUB) if FORCE_SUB and not FORCE_SUB.startswith("-") else FORCE_SUB
+FORCE_SUB_URL = f"https://t.me/{FORCE_SUB}" if FORCE_SUB and not FORCE_SUB.startswith("-") else ""
+
 MONITOR_INTERVAL = env_int("MONITOR_INTERVAL", 300, lo=30)
 DISK_ALERT = env_int("DISK_ALERT", 90, lo=1, hi=100)
 MEM_ALERT = env_int("MEM_ALERT", 90, lo=1, hi=100)
@@ -143,7 +170,17 @@ A web UI served by the bot itself on its health port. Sign-in is automatic: Tele
 the request and the bot checks the signature, so there is no extra password. Browse files, upload
 from your phone (resumable, queued like any other upload), run shell commands, watch VPS stats -
 and the buttons appear once WEBAPP_URL points at the bot's public HTTPS address (PaaS platforms
-provide one automatically; on a plain VPS put nginx or Caddy in front for HTTPS)."""
+provide one automatically; on a plain VPS put nginx or Caddy in front for HTTPS).
+
+ADMIN (ADMINS / DEV_ID only)
+/admin - panel: overview, users and usage, ban / unban, broadcast to everyone
+The Mini App has the same panel as a tab (/app), with live cards per user.
+
+SOURCE
+{REPO_URL} - fork it and run your own; please keep the link in place.
+{DEV_LINE}"""
+HELP = HELP.replace("{REPO_URL}", REPO_URL)
+HELP = HELP.replace("{DEV_LINE}", f"Developer: @{DEV_CHANNEL}" if DEV_CHANNEL else "")
 
 
 # ---------------------------------------------------------------- helpers
@@ -477,9 +514,66 @@ def menu_kb():
     ])
 
 
+# ---------------------------------------------------------------- gates: force-subscribe + banned users
+SUB_OK = {}       # uid -> (joined, ts) cached membership answers (5 min)
+SUB_WARNED = 0.0  # last log line about a broken FORCE_SUB setup (once an hour, not per request)
+
+
+async def sub_ok(uid):
+    """Force-subscribe gate. True when FORCE_SUB is off, the user joined the channel, or the user is
+    exempt (admins / the developer). Answers are cached for 5 minutes so the API limits stay safe.
+    A misconfigured channel (bot not added as admin) fails OPEN with a hourly warning - the gate
+    must protect the channel, not brick the bot."""
+    if not FORCE_SUB or uid in ADMINS:
+        return True
+    now = time.time()
+    hit = SUB_OK.get(uid)
+    if hit and now - hit[1] < 300:
+        return hit[0]
+    joined = False
+    try:
+        m = await app.get_chat_member(FORCE_SUB, uid)
+        status = getattr(getattr(m, "status", None), "value", "")
+        joined = status in ("owner", "administrator", "member") or (status == "restricted" and getattr(m, "is_member", False))
+    except Exception as e:
+        if "participant" in type(e).__name__.lower():  # the user is simply not in the channel
+            joined = False
+        else:  # the bot cannot see the channel (not an admin there?), a flood wait, ...
+            global SUB_WARNED
+            joined = True
+            if now - SUB_WARNED > 3600:
+                SUB_WARNED = now
+                logging.warning("FORCE_SUB membership check failed (%s: %s); allowing requests. "
+                                "Add the bot as ADMIN in the channel %s so it can check members.",
+                                type(e).__name__, e, FORCE_SUB_LABEL)
+    SUB_OK[uid] = (joined, now)
+    return joined
+
+
+def join_kb():
+    rows = [[Btn("📢 Join the channel", url=FORCE_SUB_URL)]] if FORCE_SUB_URL else []
+    rows.append([Btn("✅ I joined - recheck", callback_data="subchk:1")])
+    return InlineKeyboardMarkup(rows)
+
+
+@app.on_message(auth, group=-1)
+async def gate(_, m):
+    """First in line for every private message from an allowed user (group -1 runs before all the
+    group-0 handlers): banned users are dropped, and with FORCE_SUB set, users who have not joined
+    the channel get a join card instead of the command they sent."""
+    uid = m.from_user.id
+    if store.is_banned(uid):
+        return await m.reply("⛔ You are banned from this bot.")
+    if not await sub_ok(uid):
+        return await m.reply(f"🔒 To use this bot, join {FORCE_SUB_LABEL} first - then tap recheck.",
+                             reply_markup=join_kb())
+    raise ContinuePropagation  # all checks passed: the normal handlers take over
+
+
 # ---------------------------------------------------------------- general commands
 @app.on_message(auth & filters.command(["start", "help"]))
 async def start(_, m):
+    store.touch_user(m.from_user.id, m.from_user.first_name or "", m.from_user.username or "")
     await m.reply(HELP)
 
 
@@ -642,8 +736,151 @@ async def audit(_, m):
 @app.on_message(auth & filters.command("about"))
 async def about(_, m):
     up = int(time.time() - STARTED)
-    await m.reply(f"🤖 VPS + file transfer bot\nuptime: {up // 3600}h {up % 3600 // 60}m\ndatabase: {store.LABEL}\n"
-                  f"session: {SESSION_SOURCE}\ninstance: {session_sync.INSTANCE}\nactive uploads: {len(store.pending_jobs())}\n{describe_perf()}")
+    lines = ["🤖 VPS + file transfer bot", f"uptime: {up // 3600}h {up % 3600 // 60}m", f"database: {store.LABEL}",
+             f"session: {SESSION_SOURCE}", f"instance: {session_sync.INSTANCE}",
+             f"active uploads: {len(store.pending_jobs())}", describe_perf(),
+             f"source: {REPO_URL}"]
+    if DEV_CHANNEL:
+        lines.append(f"developer: @{DEV_CHANNEL}" + (f" (id {DEV_ID})" if DEV_ID else ""))
+    if m.from_user.id in ADMINS:
+        lines.append(f"admin: yes ({len(ADMINS)} admin(s), {store.user_counts()[0]} known user(s))")
+    await m.reply("\n".join(lines))
+
+
+# ---------------------------------------------------------------- admin panel (ADMINS / DEV_ID)
+async def broadcast(text, admin_uid):
+    """Message every known user (from the admin panel). A report lands in the admin's chat."""
+    ids = store.user_ids()
+    sent = failed = 0
+    for uid in ids:
+        try:
+            await app.send_message(uid, text)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)  # ~20/s, under Telegram's ~30 messages/s ceiling
+    try:
+        await app.send_message(admin_uid, f"📣 Broadcast done: {sent} delivered, {failed} failed ({len(ids)} users).")
+    except Exception:
+        pass
+    return sent, failed
+
+
+async def _do_ban(mm, admin_uid, target, flag):
+    store.ban_user(target, flag)
+    store.log(admin_uid, "admin", f"{'banned' if flag else 'unbanned'} user {target}")
+    await mm.reply(f"⛔ User {target} banned." if flag else f"✅ User {target} unbanned.")
+
+
+def admin_overview_text():
+    now = int(time.time())
+    users_total, users_banned = store.user_counts()
+    servers, monitored = store.server_counts()
+    states = store.jobs_by_state()
+    done_n, done_b = store.global_jobs(("done",))
+    day_n, day_b = store.global_jobs(("done",), since=now - 86400)
+    up = now - int(STARTED)
+    stage_files, stage_bytes = webapi.staging_stats()
+    lines = [
+        "👑 Admin panel",
+        f"⏱ uptime {up // 3600}h {up % 3600 // 60}m · 🗄 {store.LABEL} · session: {SESSION_SOURCE}",
+        f"👥 users: {users_total} known ({users_banned} banned) · allowed list: {len(ALLOWED)}",
+        f"🖥 servers: {servers} ({monitored} monitored)",
+        f"📦 uploads: {states.get('done', 0)} done ({human(done_b)}) · today {day_n} ({human(day_b)})",
+        f"   queued {states.get('queued', 0)} · running {states.get('running', 0)} · failed {states.get('failed', 0)}",
+        f"📂 app staging: {stage_files} file(s), {human(stage_bytes)}",
+        f"🔒 force-sub: {FORCE_SUB_LABEL or 'off'} · 📱 Mini App: {WEBAPP_URL or 'off'}",
+    ]
+    top = store.top_users(5)
+    if top:
+        known = {r["uid"]: r for r in store.users(500)}
+        lines.append("📈 top users:")
+        for u, n, b in top:
+            who = known.get(u) or {}
+            name = ("@" + who["username"]) if who.get("username") else (who.get("name") or str(u))
+            lines.append(f"   • {name}: {n} uploads, {human(b)}")
+    lines.append("\n/admin users · /admin user <id> · /admin ban|unban <id> · /admin broadcast <text> · or the Admin tab in /app")
+    return "\n".join(lines)
+
+
+def admin_users_text():
+    known = store.users(100)
+    if not known:
+        return "No known users yet - they appear when someone /start's the bot or opens the Mini App."
+    top = {u: (n, b) for u, n, b in store.top_users(1000)}
+    lines = [f"👥 {len(known)} known user(s)"]
+    for r in known:
+        who = ("@" + r["username"]) if r.get("username") else (r.get("name") or str(r["uid"]))
+        n, b = top.get(r["uid"], (0, 0))
+        seen = time.strftime("%m-%d %H:%M", time.gmtime(r.get("last_seen") or 0))
+        lines.append(f"{'⛔' if r.get('banned') else '•'} {who} ({r['uid']}) - {n} upload(s), {human(b)}, last seen {seen}")
+    lines.append("\nDetail: /admin user <id> · ban: /admin ban <id>")
+    return "\n".join(lines)
+
+
+def admin_user_text(uid):
+    r = store.user(uid)
+    if not r:
+        return f"No data for {uid} yet (nobody with that id has used the bot)."
+    who = ("@" + r["username"]) if r.get("username") else (r.get("name") or str(uid))
+    u = store.usage(uid)
+    lines = [
+        f"👤 {who} ({uid})" + (" ⛔ BANNED" if r.get("banned") else ""),
+        f"joined {time.strftime('%Y-%m-%d', time.gmtime(r.get('joined') or 0))} · last seen "
+        f"{time.strftime('%m-%d %H:%M', time.gmtime(r.get('last_seen') or 0))}",
+        f"uploads: {u['today'][0]} today ({human(u['today'][1])}) · {u['week'][0]} in 7 days ({human(u['week'][1])})",
+        f"waiting/running: {u['pending']} · failed: {u['failed']}",
+    ]
+    servers = store.list_servers(uid)
+    if servers:
+        lines.append("servers: " + ", ".join(f"{s['name']} ({s['scheme']}://{s['host']})" for s in servers))
+    else:
+        lines.append("servers: none")
+    acts = store.recent_log(uid, 8)
+    if acts:
+        lines.append("recent actions:\n" + "\n".join(
+            f"  {time.strftime('%m-%d %H:%M', time.gmtime(a['ts']))} [{a['server']}] {a['action']}" for a in acts))
+    return "\n".join(lines)
+
+
+@app.on_message(auth & filters.command("admin"))
+async def admin_cmd(_, m):
+    uid = m.from_user.id
+    if uid not in ADMINS:
+        return await m.reply("👑 Admins only. Set ADMINS (or DEV_ID) to your Telegram id to open the panel.")
+    arg = arg_text(m).strip()
+    head, _, rest = arg.partition(" ")
+    head = head.lower()
+    if not arg:
+        kb = InlineKeyboardMarkup([[Btn("📊 Refresh", callback_data="adm:overview")],
+                                   [Btn("👥 Users", callback_data="adm:users")]])
+        return await m.reply(admin_overview_text(), reply_markup=kb)
+    if head == "overview":
+        return await m.reply(admin_overview_text())
+    if head == "users":
+        return await m.reply(admin_users_text())
+    if head == "user" and rest.strip().lstrip("-").isdigit():
+        return await m.reply(admin_user_text(int(rest.strip())))
+    if head in ("ban", "unban") and rest.strip().lstrip("-").isdigit():
+        target = int(rest.strip())
+        if target in ADMINS:
+            return await m.reply("That is an admin - remove them from ADMINS first.")
+        if head == "ban":
+            return await confirm(m, uid, f"Ban user {target}? They lose access to the chat and the Mini App.",
+                                 lambda mm: _do_ban(mm, uid, target, True))
+        await _do_ban(m, uid, target, False)
+        return
+    if head == "broadcast" and rest.strip():
+        text = rest.strip()[:3500]
+        n = len(store.user_ids())
+        return await confirm(m, uid, f"📣 Send this to {n} user(s)?\n\n{text[:600]}",
+                             lambda mm: broadcast_and_report(mm, uid, text))
+    await m.reply("Usage: /admin [overview | users | user <id> | ban <id> | unban <id> | broadcast <text>]")
+
+
+async def broadcast_and_report(mm, uid, text):
+    sent, failed = await broadcast(text, uid)
+    await mm.reply(f"📣 Broadcast: {sent} delivered, {failed} failed.")
 
 
 @app.on_message(auth & filters.command("monitor"))
@@ -1283,6 +1520,20 @@ async def text_in(_, m):
 async def on_callback(_, cq):
     kind, _, arg = (cq.data or "").partition(":")
     uid, msg = cq.from_user.id, cq.message
+    if store.is_banned(uid):
+        return await cq.answer("⛔ You are banned from this bot.", show_alert=True)
+    if kind == "subchk":  # 'I joined - recheck' under the force-subscribe card
+        await cq.answer()
+        SUB_OK.pop(uid, None)  # drop the cached answer and really check again
+        if await sub_ok(uid):
+            await msg.reply("✅ Thanks! Send your command again.")
+        else:
+            await msg.reply(f"🔒 You still need to join {FORCE_SUB_LABEL} first.")
+        return
+    if not await sub_ok(uid):  # the same gate as messages, for every button
+        if FORCE_SUB_URL:
+            return await cq.answer(f"Join {FORCE_SUB_LABEL} first", url=FORCE_SUB_URL)
+        return await cq.answer(f"Join {FORCE_SUB_LABEL} first", show_alert=True)
     if kind in ("ok", "no"):
         item = PENDING.pop(arg, None)
         if not item or item[0] != uid or time.time() - item[1] > 300:
@@ -1337,6 +1588,12 @@ async def on_callback(_, cq):
             return await do_reboot(msg, uid)
         if arg in VIEWS:
             return await do_view(msg, uid, arg)
+    if kind == "adm" and uid in ADMINS:  # the /admin panel's buttons
+        await cq.answer()
+        if arg == "overview":
+            return await msg.reply(admin_overview_text())
+        if arg == "users":
+            return await msg.reply(admin_users_text())
 
 
 # ---------------------------------------------------------------- monitoring
@@ -1386,7 +1643,7 @@ COMMANDS = [
     ("queue", "Upload queue"), ("retry", "Retry failed uploads"), ("folder", "Auto-folder template"),
     ("servers", "Saved servers"), ("add", "Add a server"), ("monitor", "Alerts on/off"),
     ("ask", "Pick the server per file"), ("audit", "Action log"), ("about", "Bot status"), ("help", "All commands"),
-    ("app", "Web UI for servers, files and console"),
+    ("app", "Web UI for servers, files and console"), ("admin", "Admin panel (admins)"),
 ]
 
 
@@ -1434,11 +1691,13 @@ def lock_lost():
 async def main():
     global SESSION_SOURCE
     port = env_int("HEALTH_PORT", 0, lo=0, hi=65535) or env_int("PORT", 0, lo=0, hi=65535)
-    webapi.configure(app, engine, BOT_TOKEN, ALLOWED, WEBAPP_URL)  # before the port opens: the app answers at once
+    webapi.configure(app, engine, BOT_TOKEN, ALLOWED, WEBAPP_URL, ADMINS)  # before the port opens: the app answers at once
     health = await health_server(port) if port else None  # up first, so the platform's health check passes at once
     await asyncio.to_thread(session_sync.acquire_lock)  # waits while an old copy is still shutting down
     SESSION_SOURCE = session_sync.restore()  # after the lock, so the old copy's final snapshot is what we restore
     await start_client()
+    for uid in ALLOWED:  # seed the admin panel's user list even before anyone says /start
+        store.touch_user(uid)
     await app.set_bot_commands([BotCommand(c, d) for c, d in COMMANDS])
     if WEBAPP_URL.startswith("https://"):  # the menu button opens the Mini App from any chat
         try:

@@ -35,7 +35,11 @@ async function api(route, data) {
     body: JSON.stringify(data || {}),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok || body.error) throw new Error(body.error || ("HTTP " + res.status));
+  if (!res.ok || body.error) {
+    const e = new Error(body.error || ("HTTP " + res.status));
+    e.needJoin = !!body.need_join; e.channel = body.channel || ""; e.joinUrl = body.url || "";
+    throw e;
+  }
   return body;
 }
 
@@ -66,12 +70,50 @@ async function boot() {
   try {
     ME = await api("me");
   } catch (e) {
+    if (e.needJoin) return showJoinGate(e);
     $("#gate").classList.remove("hidden");
     $("#gate .card p").textContent = e.message;
     return;
   }
+  applyCredit(ME.credit);
   $("#srv-chip").innerHTML = ME.active ? "<b>&#9679;</b> " + esc(ME.active) : "no server";
+  if (ME.admin) $("#tab-admin").classList.remove("hidden");
   if (!ME.active) { showTab("servers"); } else { showTab("files"); loadFiles(); }
+}
+
+function showJoinGate(e) {
+  /* FORCE_SUB is on and this account has not joined the channel yet */
+  $("#join-text").textContent = e.message || "Join the channel to use this bot, then come back.";
+  const join = $("#join-btn");
+  if (e.joinUrl) { join.classList.remove("hidden"); join.onclick = () => openLink(e.joinUrl); }
+  else { join.classList.add("hidden"); }
+  $("#join-retry").onclick = async () => {
+    try { ME = await api("me"); }
+    catch (err) { if (!err.needJoin) toast(err.message, true); return; }
+    $("#joingate").classList.add("hidden");
+    boot();
+  };
+  $("#joingate").classList.remove("hidden");
+}
+
+function openLink(url) {
+  if (tg && tg.openLink) return tg.openLink(url);
+  window.open(url, "_blank", "noopener");
+}
+
+function applyCredit(credit) {
+  /* the fork and developer links - please keep them, so people can find the source */
+  if (!credit) return;
+  if (credit.repo) { $("#foot-repo").href = credit.repo; }
+  if (credit.dev_channel) {
+    const a = $("#foot-dev");
+    a.href = "https://t.me/" + credit.dev_channel;
+    a.textContent = "by @" + credit.dev_channel;
+    a.classList.remove("hidden");
+    a.previousElementSibling.classList.remove("hidden");
+  } else {
+    $("#foot-dev").previousElementSibling.classList.add("hidden");
+  }
 }
 
 function showTab(name) {
@@ -84,6 +126,7 @@ function showTab(name) {
   if (name === "console") { /* keeps its output */ }
   if (name === "stats") loadStats();
   if (name === "queue") { loadJobs(); loadAudit(); }
+  if (name === "admin") loadAdmin();
 }
 
 function esc(s) {
@@ -440,5 +483,119 @@ async function loadAudit() {
 /* ---------------------------------------------------------------- nav */
 document.querySelectorAll("nav#tabs .tab").forEach((t) => { t.onclick = () => showTab(t.dataset.tab); });
 $("#srv-chip").onclick = () => showTab("servers");
+$("#foot-repo").onclick = (e) => { e.preventDefault(); openLink($("#foot-repo").href); };
+$("#foot-dev").onclick = (e) => { e.preventDefault(); openLink($("#foot-dev").href); };
+
+/* ---------------------------------------------------------------- admin */
+async function loadAdmin() {
+  if (!ME || !ME.admin) return;
+  try { renderAdminOverview(await api("admin/overview", {})); }
+  catch (e) { $("#adm-cards").innerHTML = ""; $("#adm-cards").appendChild(el("div", "dim", e.message)); }
+  try { renderAdminUsers(await api("admin/users", {})); }
+  catch (e) { /* the overview already said it */ }
+}
+
+function fmtUptime(s) {
+  if (!s && s !== 0) return "?";
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return (d ? d + "d " : "") + (h || d ? h + "h " : "") + m + "m";
+}
+
+function timeAgo(ts) {
+  if (!ts) return "never";
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+
+function renderAdminOverview(d) {
+  const box = $("#adm-cards");
+  box.innerHTML = "";
+  const add = (k, v) => { const s = el("div", "stat"); s.appendChild(el("div", "k", k)); s.appendChild(el("div", "v", String(v))); box.appendChild(s); };
+  add("users", d.users.total + (d.users.banned ? " (" + d.users.banned + " banned)" : ""));
+  add("servers", d.servers.total + " (" + d.servers.monitored + " monitored)");
+  add("uploads done", d.jobs.done || 0);
+  add("moved", human(d.done.total[1] || 0));
+  add("today", (d.done.day[0] || 0) + " - " + human(d.done.day[1] || 0));
+  add("queued / running", (d.jobs.queued || 0) + " / " + (d.jobs.running || 0));
+  add("failed", d.jobs.failed || 0);
+  add("uptime", fmtUptime(d.bot.uptime));
+  add("database", d.bot.database);
+  add("force-sub", d.bot.force_sub);
+  add("staged", d.staging.files + " - " + human(d.staging.bytes || 0));
+  add("today / 7d", (d.done.day[0] || 0) + " / " + (d.done.week[0] || 0));
+  const top = $("#adm-top");
+  top.textContent = (d.top || []).map((t) => {
+    const who = (t.uid === (ME.user && ME.user.id) ? "you" : "#" + t.uid);
+    return who + ": " + t.uploads + " uploads, " + human(t.bytes);
+  }).join("\n") || "(no finished uploads yet)";
+}
+
+function renderAdminUsers(d) {
+  const box = $("#adm-users");
+  box.innerHTML = "";
+  if (!d.users.length) { box.appendChild(el("div", "dim", "No known users yet.")); return; }
+  d.users.forEach((u) => {
+    const row = el("div", "row");
+    const ico = el("div", "ico", u.banned ? "\uD83D\uDED1" : "\uD83D\uDC64");
+    row.appendChild(ico);
+    const mid = el("div", "grow");
+    const head = el("div", null, "");
+    if (u.banned) head.appendChild(el("span", "badge bad", "banned"));
+    head.appendChild(el("span", null, (u.username ? "@" + u.username : u.name || "") + " (" + u.uid + ")"));
+    mid.appendChild(head);
+    mid.appendChild(el("div", "dim", u.servers + " server(s) - " + u.uploads + " uploads, " + human(u.bytes) + " - seen " + timeAgo(u.last_seen)));
+    row.appendChild(mid);
+    const mini = el("div", "mini");
+    const ban = el("button", null, u.banned ? "unban" : "ban");
+    ban.onclick = async () => {
+      const what = u.banned ? "unban" : "ban";
+      if (!(await confirmDialog(what + " user " + u.uid + "?"))) return;
+      try { await api("admin/ban", { uid: u.uid, flag: !u.banned }); loadAdmin(); }
+      catch (e) { toast(e.message, true); }
+    };
+    mini.appendChild(ban);
+    row.appendChild(mini);
+    row.onclick = () => sheetAdminUser(u.uid);
+    box.appendChild(row);
+  });
+}
+
+async function sheetAdminUser(uid) {
+  let d;
+  try { d = await api("admin/user", { uid }); }
+  catch (e) { return toast(e.message, true); }
+  const c = $("#sheet-content");
+  c.innerHTML = "";
+  const u = d.user;
+  c.appendChild(el("h3", null, (u.username ? "@" + u.username : u.name || "user") + " (" + u.uid + ")" + (u.banned ? " - BANNED" : "")));
+  c.appendChild(el("div", "dim", "joined " + new Date(u.joined * 1000).toISOString().slice(0, 10) + " - seen " + timeAgo(u.last_seen)));
+  c.appendChild(el("div", null, "uploads: " + d.usage.today[0] + " today (" + human(d.usage.today[1]) + "), " + d.usage.week[0] + " in 7 days (" + human(d.usage.week[1]) + ")"));
+  c.appendChild(el("div", null, "waiting/running " + d.usage.pending + " - failed " + d.usage.failed));
+  c.appendChild(el("div", "dim", "servers: " + (d.servers.length ? d.servers.map((s) => s.name + " (" + s.scheme + "://" + s.host + ")").join(", ") : "none")));
+  const acts = (d.audit || []).map((a) => new Date(a.ts * 1000).toISOString().slice(5, 16).replace("T", " ") + "  [" + a.server + "] " + a.action).join("\n");
+  if (acts) {
+    const t = el("div", "term small", acts);
+    t.style.marginTop = "10px";
+    c.appendChild(t);
+  }
+  const close = el("button", "btn", "Close");
+  close.onclick = closeSheet;
+  c.appendChild(close);
+  $("#sheet").classList.remove("hidden");
+}
+
+$("#adm-bc-send").onclick = async () => {
+  const text = $("#adm-bc").value.trim();
+  if (!text) return toast("write the message first", true);
+  if (!(await confirmDialog("Send this message to every known user?"))) return;
+  try {
+    const r = await api("admin/broadcast", { text });
+    $("#adm-bc").value = "";
+    toast("queued for " + r.queued + " user(s)");
+  } catch (e) { toast(e.message, true); }
+};
 
 boot();

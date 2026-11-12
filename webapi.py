@@ -2,14 +2,17 @@
 
 Authentication is passwordless: Telegram signs every request. The web client sends the WebApp initData
 it received when the app opened (header X-Tg-Init-Data); we verify the HMAC with the bot token (the
-algorithm from Telegram's Mini App docs) and require the user id to be in ALLOWED_USERS. No cookies,
-no sessions, no secrets stored.
+algorithm from Telegram's Mini App docs), check the account is not banned, enforce the optional
+FORCE_SUB channel, and require the user id to be in ALLOWED_USERS. No cookies, no sessions, no
+secrets stored. On top of that every user is rate-limited (WEB_RATE requests per minute).
 
 Layout of this module:
   check_init_data()   the signature check
+  rate_ok()           per-user token bucket
+  web_gate()          the force-subscribe gate
   configure()         wires the running bot's objects in (called from bot.main before the port opens)
   start()             the asyncio HTTP server (also answers /health and /healthz for platform checks)
-  h_*()               one function per API route (POST /api/<name>)
+  h_*()               one function per API route (POST /api/<name>); admin/* needs ADMINS / DEV_ID
 
 Uploads from the app travel in chunks to a staging directory (resumable on flaky mobile links), then a
 job is queued with src "web:<staged file>" and the existing queue engine streams it to the server with
@@ -17,7 +20,12 @@ the same retries, resume and duplicate policies as Telegram uploads. Staged file
 kept for /retry; everything else is removed when its job ends (or after a day untouched).
 
 New env vars: WEBAPP_URL (public HTTPS URL of this port, for the /app button and the menu button),
-WEB_MAX_MB (staging cap for app uploads, default 4096, 0 = unlimited).
+WEB_MAX_MB (staging cap for app uploads, default 4096, 0 = unlimited), WEB_RATE (API requests per
+minute per user, default 90), ADMINS / DEV_ID (who may use the admin panel), DEV_CHANNEL (developer
+credit), FORCE_SUB (channel the users must join first).
+
+The source link and developer credit (REPO_URL, DEV_ID, DEV_CHANNEL) are served to the UI so forks
+keep pointing at the project - please leave them in place.
 """
 import asyncio
 import hashlib
@@ -35,6 +43,7 @@ import time
 from urllib.parse import unquote, urlparse
 
 import store
+from perf import describe as describe_perf
 from remote import Counting, Remote, fingerprint, load_pkey
 from util import clean_name, clean_path, env_int, human
 
@@ -45,17 +54,30 @@ MAX_JSON = 1024 * 1024       # request body cap for regular API routes
 CHUNK = 4 * 1024 * 1024      # upload chunk size the client uses
 GET_ATTEMPTS = 3
 STALE_STAGE = 24 * 3600      # staged uploads not touched for a day are removed
+RATE = env_int("WEB_RATE", 90, lo=10)  # API requests per minute per user (token bucket)
 
 APP = None                    # pyrogram client (set by configure)
 ENGINE = None                 # jobs.Engine
 BOT_TOKEN = ""
 ALLOWED = set()
+ADMINS = set()                # Telegram ids allowed on the admin routes (bot.main passes DEV_ID in too)
 WEBAPP_URL = ""
 WEB_MAX = env_int("WEB_MAX_MB", 4096, lo=0) * 1024 * 1024  # 0 = no cap
 STAGE_DIR = os.path.join(tempfile.gettempdir(), "vpsbot-webuploads")
 UPLOADS = {}                  # token -> {uid, name, size, ts} for uploads being chunked in
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
-STATIC = {"app.css": "text/css; charset=utf-8", "app.js": "application/javascript; charset=utf-8"}
+STATIC = {"app.css": "text/css; charset=utf-8", "app.js": "application/javascript; charset=utf-8",
+          "logo.png": "image/png"}
+
+# Credit block served to the UI: forks keep the link, so people can find the source and the developer.
+REPO_URL = "https://github.com/Exon101x/Tg-vps-bot"
+DEV_ID = env_int("DEV_ID", 0)
+DEV_CHANNEL = os.getenv("DEV_CHANNEL", "").strip().lstrip("@")
+
+
+def credits():
+    """The footer block the UI shows on every tab."""
+    return {"repo": REPO_URL, "dev_id": DEV_ID, "dev_channel": DEV_CHANNEL}
 
 
 class ApiError(Exception):
@@ -102,8 +124,44 @@ def auth(headers):
         raise ApiError("no Telegram user in this request", 401)
     if ALLOWED and user["id"] not in ALLOWED:  # the same gate as the chat: id must be in ALLOWED_USERS
         raise ApiError("this Telegram account is not on the bot's ALLOWED_USERS list", 403)
+    if store.is_banned(user["id"]):  # the admin panel's ban switch, enforced in chat and app alike
+        raise ApiError("this account is banned from this bot", 403)
     user["username"] = user.get("username") or ""
     return user
+
+
+# ---------------------------------------------------------------- rate limiting
+_bucks = {}  # uid -> [tokens, last refill] one token bucket per user
+
+
+def rate_ok(uid):
+    """Token bucket: RATE requests per minute per user (plus the burst the bucket holds). Keeps a
+    runaway client - or a replayed initData - from hammering SSH consoles and the database."""
+    now = time.monotonic()
+    b = _bucks.get(uid)
+    if not b or now - b[1] > 60:
+        if len(_bucks) > 4096:  # a long-lived process: forget buckets that ran dry long ago
+            for k in [k for k, v in _bucks.items() if now - v[1] > 300]:
+                _bucks.pop(k, None)
+        b = _bucks.setdefault(uid, [float(RATE), now])
+    b[0] = min(RATE, b[0] + (now - b[1]) * RATE / 60.0)  # refill to the cap
+    b[1] = now
+    if b[0] < 1:
+        return False
+    b[0] -= 1
+    return True
+
+
+async def web_gate(user):
+    """Force-subscribe gate for the API: None when the user may proceed, else a JSON 403 body the
+    UI turns into a 'join the channel' screen. Admins and the developer are exempt."""
+    import bot  # late import: the gate shares the chat-side check and its membership cache
+    if not bot.FORCE_SUB or user["id"] in bot.ADMINS:
+        return None
+    if await bot.sub_ok(user["id"]):
+        return None
+    return jdump({"error": f"join {bot.FORCE_SUB_LABEL} to use the bot, then reopen the app",
+                  "need_join": True, "channel": bot.FORCE_SUB_LABEL, "url": bot.FORCE_SUB_URL}, 403)
 
 
 # ---------------------------------------------------------------- helpers
@@ -111,7 +169,7 @@ def jdump(obj, status=200):
     body = json.dumps(obj, default=str).encode()
     head = f"HTTP/1.1 {status} {'OK' if status == 200 else 'Error'}\r\nContent-Type: application/json\r\n" \
            f"Content-Length: {len(body)}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n" \
-           f"Connection: close\r\n\r\n"
+           f"Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n"
     return head.encode() + body
 
 
@@ -176,13 +234,29 @@ def int_arg(data, key, default=0):
         return default
 
 
+def staging_stats():
+    """(number of staged files, bytes) in the upload staging directory (admin overview)."""
+    files = bytes_ = 0
+    try:
+        for f in os.listdir(STAGE_DIR):
+            p = os.path.join(STAGE_DIR, f)
+            if os.path.isfile(p):
+                files += 1
+                bytes_ += os.path.getsize(p)
+    except OSError:
+        pass
+    return files, bytes_
+
+
 # ---------------------------------------------------------------- API routes
 async def h_me(user, data):
     uid = user["id"]
+    store.touch_user(uid, user.get("first_name") or "", user.get("username") or "")
     return {"user": {"id": uid, "name": user.get("first_name") or user.get("username") or str(uid)},
             "servers": store.list_servers(uid), "active": store.active_name(uid),
             "ask": store.kv_get(f"ask:{uid}") == "1",
-            "max_mb": WEB_MAX // (1024 * 1024) if WEB_MAX else 0}
+            "max_mb": WEB_MAX // (1024 * 1024) if WEB_MAX else 0,
+            "admin": uid in ADMINS, "credit": credits()}
 
 
 async def h_add(user, data):
@@ -562,12 +636,97 @@ async def h_audit(user, data):
     return {"rows": [{"ts": r["ts"], "server": r["server"], "action": r["action"]} for r in rows]}
 
 
+# ---------------------------------------------------------------- admin routes (ADMINS / DEV_ID only)
+def need_admin(user):
+    if user["id"] not in ADMINS:
+        raise ApiError("admins only (set ADMINS or DEV_ID to your Telegram id)", 403)
+
+
+async def h_admin_overview(user, data):
+    import bot
+    need_admin(user)
+    now = int(time.time())
+    users_, banned = store.user_counts()
+    servers, monitored = store.server_counts()
+    stage_files, stage_bytes = staging_stats()
+    return {
+        "users": {"total": users_, "banned": banned, "allowed_list": len(ALLOWED)},
+        "servers": {"total": servers, "monitored": monitored},
+        "jobs": store.jobs_by_state(),
+        "done": {"total": list(store.global_jobs(("done",))),
+                 "day": list(store.global_jobs(("done",), since=now - 86400)),
+                 "week": list(store.global_jobs(("done",), since=now - 7 * 86400))},
+        "staging": {"files": stage_files, "bytes": stage_bytes, "cap": WEB_MAX},
+        "bot": {"uptime": int(now - bot.STARTED), "database": store.LABEL, "instance": bot.SESSION_SOURCE,
+                "force_sub": bot.FORCE_SUB_LABEL or "off", "webapp_url": WEBAPP_URL or "off",
+                "perf": describe_perf()},
+        "top": [{"uid": u, "uploads": n, "bytes": b} for u, n, b in store.top_users(10)],
+    }
+
+
+async def h_admin_users(user, data):
+    need_admin(user)
+    top = {u: (n, b) for u, n, b in store.top_users(1000)}
+    rows = []
+    for r in store.users(int_arg(data, "limit", 100) or 100):
+        n, b = top.get(r["uid"], (0, 0))
+        rows.append({"uid": r["uid"], "name": r.get("name") or "", "username": r.get("username") or "",
+                     "joined": r.get("joined") or 0, "last_seen": r.get("last_seen") or 0,
+                     "banned": bool(r.get("banned")), "uploads": n, "bytes": b,
+                     "servers": len(store.list_servers(r["uid"]))})
+    return {"users": rows}
+
+
+async def h_admin_user(user, data):
+    need_admin(user)
+    uid = int_arg(data, "uid")
+    if not uid:
+        raise ApiError("uid is required")
+    r = store.user(uid)
+    if not r:
+        raise ApiError("no such user (they have not used the bot yet)", 404)
+    return {"user": {"uid": r["uid"], "name": r.get("name") or "", "username": r.get("username") or "",
+                     "joined": r.get("joined") or 0, "last_seen": r.get("last_seen") or 0,
+                     "banned": bool(r.get("banned"))},
+            "servers": store.list_servers(uid), "usage": store.usage(uid),
+            "audit": store.recent_log(uid, 15)}
+
+
+async def h_admin_ban(user, data):
+    need_admin(user)
+    uid = int_arg(data, "uid")
+    if not uid:
+        raise ApiError("uid is required")
+    if uid in ADMINS:
+        raise ApiError("cannot ban an admin")
+    flag = bool(data.get("flag"))
+    store.ban_user(uid, flag)
+    store.log(user["id"], "admin", f"web: {'banned' if flag else 'unbanned'} user {uid}")
+    return {"uid": uid, "banned": flag}
+
+
+async def h_admin_broadcast(user, data):
+    need_admin(user)
+    import bot
+    text = (data.get("text") or "").strip()
+    if not text:
+        raise ApiError("text is required")
+    if len(text) > 3500:
+        raise ApiError("message too long (3500 characters max)")
+    ids = store.user_ids()
+    asyncio.create_task(bot.broadcast(text, user["id"]))
+    store.log(user["id"], "admin", f"web: broadcast to {len(ids)} users")
+    return {"queued": len(ids), "note": "sending now; the report arrives in your chat"}
+
+
 ROUTES = {
     "me": h_me, "servers/add": h_add, "servers/use": h_use, "servers/del": h_del, "servers/set": h_set,
     "ls": h_ls, "cd": h_cd, "mkdir": h_mkdir, "rm": h_rm, "mv": h_mv,
     "term": h_term, "stats": h_stats, "view": h_view, "send": h_send, "fetch": h_fetch,
     "up/init": h_up_init, "up/chunk": h_up_chunk, "up/status": h_up_status, "up/finish": h_up_finish,
     "jobs": h_jobs, "jobs/action": h_jobs_action, "audit": h_audit,
+    "admin/overview": h_admin_overview, "admin/users": h_admin_users, "admin/user": h_admin_user,
+    "admin/ban": h_admin_ban, "admin/broadcast": h_admin_broadcast,
 }
 
 
@@ -596,20 +755,26 @@ def static_response(name):
                b"Cache-Control: no-store\r\nConnection: close\r\n\r\n"
     ctype = b"text/html; charset=utf-8" if name == "index.html" else STATIC[name].encode()
     return (b"HTTP/1.1 200 OK\r\nContent-Type: " + ctype + b"\r\nContent-Length: " + str(len(body)).encode()
-            + b"\r\nX-Content-Type-Options: nosniff\r\n"
+            + b"\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
             + b"Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; "
-              b"style-src 'self'; connect-src 'self'; img-src 'self' data:\r\n"
+              b"style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; "
+              b"frame-ancestors https://web.telegram.org https://*.telegram.org; form-action 'none'\r\n"
             + b"Cache-Control: no-cache\r\nConnection: close\r\n\r\n" + body)
 
 
 async def api_response(headers, body):
-    """Authenticate, dispatch, answer. Errors are JSON with a message the UI shows as-is."""
+    """Authenticate, gate, dispatch, answer. Errors are JSON with a message the UI shows as-is."""
     try:
         route = headers["__path"][len("/api/"):]
         fn = ROUTES.get(route)
         if not fn:
             raise ApiError("no such route", 404)
         user = auth(headers)
+        if not rate_ok(user["id"]):
+            raise ApiError("too many requests - wait a moment and try again", 429)
+        blocked = await web_gate(user)  # FORCE_SUB: the UI shows a 'join the channel' screen
+        if blocked is not None:
+            return blocked
         if route == "up/chunk":
             data = {}
         else:
@@ -671,8 +836,9 @@ async def start(port, bind=None):
     return await asyncio.start_server(handle, bind, port)
 
 
-def configure(app, engine, token, allowed, webapp_url=""):
+def configure(app, engine, token, allowed, webapp_url="", admins=()):
     """Called from bot.main before the port opens. Kept as one function so tests can wire stubs in."""
-    global APP, ENGINE, BOT_TOKEN, ALLOWED, WEBAPP_URL
+    global APP, ENGINE, BOT_TOKEN, ALLOWED, WEBAPP_URL, ADMINS
     APP, ENGINE, BOT_TOKEN, ALLOWED, WEBAPP_URL = app, engine, token, set(allowed), (webapp_url or "")
+    ADMINS = set(admins)
     sweep_staged()

@@ -57,6 +57,9 @@ Heroku or any VPS with Python 3.10+.
 | **Files beyond 4 GB** | `/multi` + `/done` joins split volumes **on the fly** into one file on any server |
 | **Per-file server picker** | `/ask on` — forward or upload a file, tap the destination server, done |
 | **Mini App** | `/app` — a web UI inside Telegram: file manager, uploads from your phone, SSH console, VPS stats; sign-in is your Telegram id, no password |
+| **Admin panel** | `/admin` and the app's **Admin** tab — users and usage, top movers, ban / unban, broadcast to everyone (`ADMINS` / `DEV_ID`) |
+| **Force-subscribe** | set `FORCE_SUB` and users must join your channel first — join card with a recheck button in chat, a join screen in the app; admins are exempt |
+| **Hardened API** | per-user rate limiting, admin-controlled ban switch, strict CSP, `initData` HMAC sign-in — nothing stored client-side |
 | **URL downloads** | `/fetch <url>` pulls HTTP(S) straight to the server — resumable, SSRF-guarded |
 | **Server → Telegram** | `/get` auto-splits into `.001 .002 …` volumes when needed, staging one at a time |
 | **Remote file manager** | `/pwd` `/cd` `/ls` `/mkdir` `/mv` `/rm` |
@@ -134,6 +137,11 @@ applies the same `ALLOWED_USERS` gate as the chat. No passwords, no cookies, not
 | **Console** | run shell commands on the active SSH server — remembered working directory, the same dangerous-command confirmation as `/sh` |
 | **Stats** | the `/stats` overview plus every `/vps` view: processes, ports, docker, disk, firewall, failed services, logins, updates |
 | **Queue** | the upload queue with retry/stop, and the audit trail |
+| **Admin** | *(ADMINS / DEV_ID only)* live overview cards — users, servers, uploads and bytes (total / today / 7 days), staging, uptime, database — plus the user list with per-user detail sheets, ban / unban and a broadcast box |
+
+With `FORCE_SUB` set, users who have not joined the channel get a dedicated **join screen** (join button + recheck)
+instead of the app, until they subscribe. The header carries the bot logo (`webapp/logo.png`), and the footer keeps
+the **GitHub fork link and the developer credit** (`DEV_CHANNEL`) — please leave them in place when you fork.
 
 To enable the button, set `WEBAPP_URL` to the bot's public HTTPS address — PaaS platforms (Render,
 Heroku, Railway, …) give you one automatically; on a plain VPS put nginx or Caddy in front (a two-line
@@ -179,7 +187,8 @@ is the template.
 | Area | Variables |
 |---|---|
 | Core | `DATABASE_URL` (default `sqlite:///bot.db`) · `PERFORMANCE` (`auto` by default) · `LOG_LEVEL` |
-| HTTP port / Mini App | `PORT` · `HEALTH_PORT` · `HEALTH_BIND` · `WEBAPP_URL` (public HTTPS address that enables the `/app` button) · `WEB_MAX_MB` (app upload cap, default 4096) |
+| HTTP port / Mini App | `PORT` · `HEALTH_PORT` · `HEALTH_BIND` · `WEBAPP_URL` (public HTTPS address that enables the `/app` button) · `WEB_MAX_MB` (app upload cap, default 4096) · `WEB_RATE` (app API requests per minute per user, default 90) |
+| Admin & community | `ADMINS` · `DEV_ID` (developer id: admin + force-sub exempt) · `DEV_CHANNEL` (developer credit) · `FORCE_SUB` (channel users must join) |
 | Transfer tuning | `TG_PARALLEL` · `TG_WINDOW_MB` · `SFTP_WINDOW_MB` · `FTP_BLOCK_KB` · `PARALLEL_PER_SERVER` |
 | Size limits | `TG_MAX_MB` · `MAX_FETCH_MB` · `MAX_RETRIES` |
 | Monitoring | `MONITOR_INTERVAL` · `DISK_ALERT` · `MEM_ALERT` |
@@ -245,7 +254,10 @@ high-latency links and big files.
 The design: SSH host keys pinned on first use, destructive commands ask for confirmation, every action
 lands in `/audit`, credentials are encrypted at rest, URL fetches are SSRF-guarded (host resolved once,
 connection pinned to the checked address), FTP paths are command-injection-safe. Prefer `ssh://`/`ftps://`
-over plain `ftp://`. Full policy and hardening checklist: [SECURITY.md](SECURITY.md).
+over plain `ftp://`. On top of that: the Mini App verifies Telegram's `initData` HMAC signature on every
+request (24 h freshness, constant-time), rate-limits every user (`WEB_RATE`), enforces admin bans in chat
+and app alike, and serves its pages with a strict CSP. Optional `FORCE_SUB` gates everything behind a
+channel subscription. Full policy and hardening checklist: [SECURITY.md](SECURITY.md).
 
 ## Development and CI
 
@@ -286,8 +298,9 @@ deploy.py         deployment setup wizard (stdlib only)
 migrate.py        copy data between databases
 healthcheck.py    Docker HEALTHCHECK helper
 Dockerfile, docker-compose.yml, render.yaml, heroku.yml, Procfile, deploy/vpsbot.service
-tests/            13 check scripts run by pytest: local FTP + SSH servers, in-memory
-                  databases, 24 security + 22 big-file + 51 mini-app checks
+assets/           banner.svg (README), logo.png (bot avatar / app icon), banner.png (wide hero)
+tests/            14 check scripts run by pytest: local FTP + SSH servers, in-memory
+                  databases, 24 security + 22 big-file + 51 mini-app + 40 admin checks
 docs/             COMMANDS.md, CONFIG.md, DEPLOY.md, ARCHITECTURE.md
 ```
 

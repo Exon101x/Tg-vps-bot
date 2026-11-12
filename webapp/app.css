@@ -19,7 +19,14 @@ header#top {
   padding: 10px 14px; background: var(--bg); border-bottom: 1px solid var(--line);
   padding-top: calc(10px + env(safe-area-inset-top));
 }
-.brand { font-weight: 700; font-size: 17px; }
+.brand { font-weight: 700; font-size: 17px; display: flex; align-items: center; gap: 7px; }
+.logo { width: 26px; height: 26px; border-radius: 8px; }
+.gate-logo { display: block; width: 88px; height: 88px; border-radius: 24px; margin: 0 auto 6px; }
+footer#foot {
+  text-align: center; font-size: 12px; padding: 4px 0 58px;
+}
+#foot a { color: var(--accent); text-decoration: none; font-weight: 600; }
+#foot .dot { color: var(--dim); margin: 0 5px; }
 .chip {
   margin-left: auto; border: 1px solid var(--line); background: var(--panel); color: var(--text);
   border-radius: 999px; padding: 5px 12px; font-size: 13px; max-width: 55%; overflow: hidden;
@@ -52,6 +59,7 @@ nav#tabs .tab.active { color: var(--accent); font-weight: 600; }
 .row .mini { display: flex; gap: 6px; }
 .row .mini button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 4px 8px; font-size: 12px; cursor: pointer; }
 .badge { font-size: 10px; border-radius: 6px; padding: 1px 6px; }
+.row .badge { margin-right: 6px; white-space: nowrap; }
 .badge.on { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
 .badge.bad { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
 .badge.dim { background: var(--panel); color: var(--dim); }

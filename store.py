@@ -143,6 +143,7 @@ _JOB_FIELDS = {"status_id", "size", "state", "attempts", "resume", "error", "des
 
 def add_job(uid, server, chat_id, src, name, dest, size=0):
     now = int(time.time())
+    touch_user(uid)  # the admin panel's user list tracks who actually moves files
     return B.job_add(dict(uid=uid, server=server, chat_id=chat_id, status_id=0, src=src, name=name, dest=dest, size=size,
                           state="queued", attempts=0, resume=0, error="", created=now, updated=now))
 
@@ -185,6 +186,78 @@ def usage(uid):
         "pending": B.job_stats(uid, ("queued", "running"))[0],
         "failed": B.job_stats(uid, ("failed",))[0],
     }
+
+
+# ---- users (the admin panel: who uses the bot, who is banned)
+_seen = {}    # uid -> (last write ts, name, username) so hot paths stay cheap
+_ban = {}     # uid -> (banned, ts) short cache so per-request gates stay cheap
+
+
+def touch_user(uid, name="", username=""):
+    """Record that a user was seen (from a chat or the Mini App); name/username stay fresh.
+    Anonymous pings (every queued job, every API request) write at most once a minute per user,
+    but a name or username change always lands right away."""
+    now = int(time.time())
+    name, username = (name or "")[:128], (username or "")[:64]
+    hit = _seen.get(uid)
+    if hit and now - hit[0] < 60 and hit[1] == name and hit[2] == username:
+        return
+    _seen[uid] = (now, name, username)
+    B.user_upsert(uid, name, username)
+
+
+def user(uid):
+    return B.user_get(uid)
+
+
+def users(limit=200):
+    return B.user_list(limit)
+
+
+def user_ids():
+    return [r["uid"] for r in B.user_list(5000)]
+
+
+def ban_user(uid, flag=True):
+    B.user_upsert(uid)  # the row must exist for the flag to land
+    B.user_ban(uid, flag)
+    _ban.pop(uid, None)
+
+
+def is_banned(uid):
+    """Cached for 30s (a flag flip shows within half a minute at the latest)."""
+    now = time.time()
+    hit = _ban.get(uid)
+    if hit and now - hit[1] < 30:
+        return hit[0]
+    row = B.user_get(uid)
+    banned = bool(row and row.get("banned"))
+    _ban[uid] = (banned, now)
+    return banned
+
+
+def user_counts():
+    """(total known users, banned users)."""
+    return B.user_counts()
+
+
+def server_counts():
+    """(saved servers across all users, monitored ones) - no credentials are loaded."""
+    return B.server_counts()
+
+
+def top_users(limit=10):
+    """[(uid, done uploads, bytes)] biggest movers first."""
+    return B.jobs_by_user(("done",), limit)
+
+
+def global_jobs(states, since=None):
+    """(number of jobs, total bytes) across all users."""
+    return B.jobs_totals(states, since)
+
+
+def jobs_by_state():
+    return B.jobs_state_counts()
 
 
 # ---- binary blobs (the Pyrogram session snapshot), encrypted at rest

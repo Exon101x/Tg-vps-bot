@@ -19,7 +19,7 @@ def run(script, **env):
     assert r.returncode == 0, (r.stdout[-4000:] + r.stderr[-2000:])
 
 
-@pytest.mark.parametrize("script", ["check_engine.py", "check_large.py", "check_multi.py", "check_perf.py", "check_deploy.py", "check_ssh.py", "check_misc.py", "check_infra.py", "check_hosting.py", "check_security.py", "check_bigfile.py", "check_webapp.py"])
+@pytest.mark.parametrize("script", ["check_engine.py", "check_large.py", "check_multi.py", "check_perf.py", "check_deploy.py", "check_ssh.py", "check_misc.py", "check_infra.py", "check_hosting.py", "check_security.py", "check_bigfile.py", "check_webapp.py", "check_admin.py"])
 def test_script(script):
     run(script, **({"DATABASE_URL": ""} if script == "check_engine.py" else {}))
 

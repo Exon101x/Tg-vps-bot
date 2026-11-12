@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.6.0 — admin panel, force-subscribe, hardened API, logo & credits
+
+* **Admin panel with the details** (`ADMINS` / `DEV_ID`): `/admin` in chat and a new **Admin** tab in
+  the Mini App — live overview cards (users, banned, servers, monitored, uploads and bytes total /
+  today / 7 days, queue states, staging files, uptime, database, force-sub status, top movers), the
+  known-users list with name, username, id, uploads, volume and last-seen, per-user detail sheets
+  (usage, their servers, their audit trail), **ban / unban** and **broadcast to everyone**. User rows
+  are tracked automatically from chats, uploads and app sessions (a new `users` table on every
+  backend: SQLite, PostgreSQL, MySQL, MongoDB — same contract, migrate.py carries it over).
+* **Force-subscribe** (`FORCE_SUB`): set a channel and users must join it before using the bot — in
+  chat they get a join card with a recheck button, in the Mini App a dedicated join screen with the
+  channel link; buttons and callbacks are gated too. Membership answers are cached for 5 minutes;
+  admins and `DEV_ID` are exempt. Add the bot as **admin** in the channel so it can check members —
+  a misconfigured channel fails open with an hourly log warning instead of bricking the bot.
+* **More security protection**: the Mini App API now **rate-limits every user** (`WEB_RATE`,
+  default 90 requests/minute, token bucket → `429`), **enforces admin bans** at the auth step
+  (403 in the app, dropped messages in chat), and ships **stricter headers**: CSP with
+  `object-src 'none'`, `base-uri 'self'`, `frame-ancestors` limited to Telegram (the old CSP would
+  have allowed any framer if `img-src` tricks were found; now only web.telegram.org may embed the
+  app), plus `Referrer-Policy: no-referrer` on every response.
+* **Ban switch**: one flag locks an account out of the chat and the app at once (30 s worst-case in
+  the API cache, instant after the flip through the panel); admins cannot be banned through the
+  panel; every ban/unban lands in the audit log.
+* **Logo & brand assets**: `assets/logo.png` (1024² robot mascot, also shipped as the lightweight
+  `webapp/logo.png` app icon + favicon) and `assets/banner.png` (wide hero). The Mini App header
+  shows the logo.
+* **Fork-friendly credits**: the GitHub source link and the developer credit (`DEV_CHANNEL`,
+  `DEV_ID`) are served to the Mini App and shown in the footer of every tab, in `/start` and
+  `/about` — please leave them in place when you fork.
+* **New env vars**: `ADMINS`, `DEV_ID`, `DEV_CHANNEL`, `FORCE_SUB`, `WEB_RATE` (documented in
+  `.env.example`, README and docs/CONFIG.md).
+* New `tests/check_admin.py` — 40 checks (users store, admin routes, ban enforcement, rate
+  limiter, force-sub gate, logo/credit assets) and the users-table contract added to
+  `check_contract.py` for every backend. Suite is now 14 check scripts.
+
 ## 1.5.0 — the Mini App: a web UI for your servers, inside Telegram
 
 * **`/app` opens a Mini App** served by the bot's own HTTP port (the old one-line health endpoint grew

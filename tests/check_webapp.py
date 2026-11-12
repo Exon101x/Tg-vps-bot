@@ -9,7 +9,7 @@ from cryptography.fernet import Fernet
 TMP = tempfile.mkdtemp()
 os.environ.update(SECRET_KEY=Fernet.generate_key().decode(), DATABASE_URL=f"sqlite:///{TMP}/web.db",
                   BOT_TOKEN="123456:ABC-DEF1234ghIkl-zyx51W2po", API_ID="1", API_HASH="0123456789abcdef0123456789abcdef",
-                  ALLOWED_USERS="7", LOG_LEVEL="WARNING", SESSION_DIR=os.path.join(TMP, "sess"))
+                  ALLOWED_USERS="7", WEB_RATE="600", LOG_LEVEL="WARNING", SESSION_DIR=os.path.join(TMP, "sess"))
 import asyncssh, store, webapi  # noqa: E402
 import bot  # noqa: E402,F401  (webapi imports it lazily at call time: it must load here, with the env above)
 import jobs  # noqa: E402

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>vpsbot</title>
+<link rel="icon" href="/static/logo.png">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 </head>
@@ -17,8 +18,18 @@
   </div>
 </div>
 
+<div id="joingate" class="gate hidden">
+  <div class="card">
+    <img src="/static/logo.png" alt="" class="gate-logo">
+    <h2>One more step</h2>
+    <p id="join-text">Join the channel to use this bot, then come back.</p>
+    <button id="join-btn" class="btn primary">Join the channel</button>
+    <button id="join-retry" class="btn">I joined - recheck</button>
+  </div>
+</div>
+
 <header id="top">
-  <div class="brand">vpsbot</div>
+  <div class="brand"><img src="/static/logo.png" alt="" class="logo">vpsbot</div>
   <button id="srv-chip" class="chip"></button>
 </header>
 
@@ -84,7 +95,28 @@
     <h3 class="sub">Recent actions</h3>
     <div id="audit" class="term small"></div>
   </section>
+
+  <section id="v-admin" class="view">
+    <div id="adm-cards" class="cards"></div>
+    <h3 class="sub">Users</h3>
+    <div id="adm-users" class="list"></div>
+    <div class="card form">
+      <h3>Broadcast</h3>
+      <textarea id="adm-bc" rows="4" placeholder="A message every known user will receive in their chat"></textarea>
+      <button id="adm-bc-send" class="btn primary">Send to everyone</button>
+    </div>
+    <h3 class="sub">Top users</h3>
+    <div id="adm-top" class="term small"></div>
+  </section>
 </main>
+
+<footer id="foot">
+  <a id="foot-repo" href="https://github.com/Exon101x/Tg-vps-bot" target="_blank" rel="noopener">Fork on GitHub</a>
+  <span class="dot">·</span>
+  <a id="foot-dev" class="hidden" href="#" target="_blank" rel="noopener"></a>
+  <span class="dot">·</span>
+  <span class="dim">vpsbot</span>
+</footer>
 
 <nav id="tabs">
   <button class="tab active" data-tab="files">Files</button>
@@ -92,6 +124,7 @@
   <button class="tab" data-tab="console">Console</button>
   <button class="tab" data-tab="stats">Stats</button>
   <button class="tab" data-tab="queue">Queue</button>
+  <button class="tab hidden" data-tab="admin" id="tab-admin">Admin</button>
 </nav>
 
 <div id="toast" class="toast hidden"></div>

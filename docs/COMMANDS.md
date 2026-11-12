@@ -16,6 +16,7 @@ switched to with `/use` — file and VPS commands all act on it. Every command w
 - [VPS management (SSH servers)](#vps-management-ssh-servers)
 - [Shell access](#shell-access)
 - [The Mini App](#the-mini-app)
+- [The admin panel](#the-admin-panel)
 - [Files over 2 GB](#files-over-2-gb)
 - [Bot status and misc](#bot-status-and-misc)
 
@@ -229,5 +230,23 @@ them to an SSH server and `/join` there.
 | `/start`, `/help` | The in-chat help |
 | `/perf` | Detected CPU/RAM and the active speed profile (see [CONFIG.md](CONFIG.md#performance-tuning)) |
 | `/cancel` | Cancel an open prompt (password/key entry), a `/multi` collection or a pending confirmation |
-| `/about` | Version, uptime, database, queue length, session state |
+| `/about` | Version, uptime, database, queue length, session state, source link and developer credit |
 | `/app` | Open the Mini App (see [The Mini App](#the-mini-app)) |
+
+## The admin panel
+
+`/admin` and the Mini App's **Admin** tab are for `ADMINS` / `DEV_ID` only. With `FORCE_SUB` set,
+non-subscribers get a join card instead of any command — admins and the developer are exempt.
+
+| Command | What it does |
+|---|---|
+| `/admin` | Overview: users, servers, uploads and bytes (total / today), queue states, staging, uptime, database, force-sub status, top movers |
+| `/admin overview` | The same overview (also the panel's Refresh button) |
+| `/admin users` | Every known user: name, id, uploads, volume, last seen, banned mark |
+| `/admin user <id>` | One user in detail: joined / last seen, usage, their servers, their recent audit trail |
+| `/admin ban <id>` | Ban a user from the chat and the Mini App (confirmation tap; admins cannot be banned) |
+| `/admin unban <id>` | Restore access |
+| `/admin broadcast <text>` | Send a message to every known user (confirmation tap; a report follows) |
+
+The **Admin tab** of the Mini App shows the same numbers as live cards, the user list with ban/unban
+taps and per-user detail sheets, and the broadcast box.

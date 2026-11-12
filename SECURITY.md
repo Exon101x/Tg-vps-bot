@@ -24,7 +24,11 @@ them) should be patched by backporting the fix commit.
 
 | Layer | Mechanism |
 |---|---|
-| Access control | Every handler sits behind the `ALLOWED_USERS` gate; the bot refuses to start with an empty list |
+| Access control | Every handler sits behind the `ALLOWED_USERS` gate; the bot refuses to start with an empty list. `FORCE_SUB` (optional) additionally requires a channel subscription — enforced for chat commands, buttons and the Mini App alike |
+| Admin controls | `ADMINS` / `DEV_ID` unlock the admin panel; bans flip one flag and lock a user out of the chat **and** the app at once (admin accounts cannot be banned through the panel) |
+| Mini App auth | Every request carries Telegram's `initData`; the HMAC-SHA256 signature is verified constant-time with `BOT_TOKEN`, `auth_date` must be fresher than 24 h — no cookies, no sessions, no secrets stored client-side |
+| Rate limiting | The app's API is a per-user token bucket (`WEB_RATE`, default 90/min) — a runaway client or a replayed `initData` gets `429` |
+| Web hardening | Static pages ship with a strict CSP (own scripts only + `telegram.org`, `object-src 'none'`, `frame-ancestors` limited to Telegram), `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`; the static route is a fixed whitelist (no traversal, no listing) |
 | Credentials at rest | Server passwords and private keys are Fernet-encrypted with `SECRET_KEY` **before** they reach any database — a stolen database alone reveals nothing |
 | SSH trust | Host keys are pinned on first use; a changed key is rejected (`/del` + `/add` re-pins deliberately) |
 | URL fetching | SSRF guard: private/reserved addresses refused, the host resolved **once** with the connection pinned to that exact address (closes DNS-rebinding TOCTOU), redirects re-validated hop by hop, `MAX_FETCH_MB` enforced while streaming |

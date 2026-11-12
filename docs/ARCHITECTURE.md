@@ -162,7 +162,11 @@ migration step to run by hand.
 
 | Layer | Mechanism |
 |---|---|
-| Access | Every handler sits behind the `ALLOWED_USERS` gate; the bot exits if the list is empty |
+| Access | Every handler sits behind the `ALLOWED_USERS` gate; the bot exits if the list is empty. A `group=-1` gate handler runs before every other handler: banned users are dropped, and with `FORCE_SUB` set, non-subscribers get a join card (membership checked via `get_chat_member`, cached 5 min; admins and `DEV_ID` exempt; a misconfigured channel fails open with an hourly warning) |
+| Admin controls | `ADMINS` / `DEV_ID` unlock `/admin` and the app's Admin tab; a ban is one flag on the user row — enforced in the chat gate and in the API auth step (30 s worst-case cache) |
+| Mini App auth | Every API request carries Telegram's `initData`; `webapi.check_init_data` verifies the HMAC-SHA256 signature constant-time with `BOT_TOKEN` and requires `auth_date` fresher than 24 h — no cookies, no sessions |
+| Rate limiting | `webapi.rate_ok`: a per-user token bucket (`WEB_RATE`/min, default 90) in front of every route — `429` on burst |
+| Web hardening | Strict CSP (own scripts + `telegram.org` only, `object-src 'none'`, `frame-ancestors` limited to `web.telegram.org`), `nosniff`, `Referrer-Policy: no-referrer`; static serving is a fixed whitelist |
 | Credentials at rest | Fernet (`SECRET_KEY`) encrypts passwords/keys **before** they reach any database |
 | SSH | Host keys pinned on first use; changed keys are rejected |
 | URL fetches | SSRF guard: private/reserved addresses refused, the host is resolved **once** and the connection is pinned to that address (no DNS-rebinding TOCTOU), redirects re-validated hop by hop, `MAX_FETCH_MB` enforced while streaming |
@@ -186,6 +190,8 @@ Reporting and operational guidance: [SECURITY.md](../SECURITY.md).
 * **Security regression suite** (`check_security.py`, 24 checks): covers every fixed vulnerability class
   (SSRF pinning, FTP injection, path traversal, duplicate-policy degradation, env-parse crashes, queue
   integrity) so none of them come back.
+* **Admin panel suite** (`check_admin.py`, 40 checks): the users store, admin routes, ban enforcement on
+  the API, the rate limiter, the FORCE_SUB join gate and the logo/credit assets.
 * **In-memory databases** by default; `TEST_DATABASE_URL=…` points the suite at a real database — that is
   exactly what CI does with PostgreSQL 16 on every push, across Python 3.10/3.11/3.12.
 * **Static analysis**: ruff (`make lint`), and CI refuses code that fails either layer.

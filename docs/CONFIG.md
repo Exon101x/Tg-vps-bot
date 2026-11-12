@@ -50,6 +50,11 @@ Tables are created automatically and older databases upgrade in place. To move b
 | `HEALTH_BIND` | `0.0.0.0` | Bind address of that server. `0.0.0.0` suits PaaS; use `127.0.0.1` on your own VPS and put a TLS proxy in front |
 | `WEBAPP_URL` | unset | The bot's public **HTTPS** address (e.g. `https://your-app.onrender.com`). When set, `/app` gets its button and the chat menu button opens the Mini App. Telegram refuses plain-HTTP web apps, so an `http://` value is ignored |
 | `WEB_MAX_MB` | `4096` | Size cap for files uploaded through the Mini App (they are staged in the temp directory before the queue streams them out; `0` = no limit) |
+| `WEB_RATE` | `90` | Mini App API requests per minute per user (token bucket). A runaway client or a replayed `initData` gets `429` |
+| `ADMINS` | unset | Comma-separated Telegram ids with access to the admin panel (`/admin` and the app's **Admin** tab) |
+| `DEV_ID` | unset | The developer's Telegram id: an admin automatically, and exempt from `FORCE_SUB`. Shown with `DEV_CHANNEL` in the credits |
+| `DEV_CHANNEL` | unset | Your channel username — shown as the developer credit in `/about`, `/start` and the Mini App footer |
+| `FORCE_SUB` | unset | Channel (`@name`, a `t.me/` link or a `-100…` id) users must join before they can use the bot — in chat **and** in the Mini App. Add the bot as **admin** in the channel so it can check membership; admins and `DEV_ID` are exempt |
 | `KEEP_ALIVE` | unset | `1` pings a URL every `KEEP_ALIVE_INTERVAL` seconds so free web services (Render) don't sleep. Set `0` on paid plans |
 | `KEEP_ALIVE_URL` | `RENDER_EXTERNAL_URL` | The URL to ping; defaults to the one Render injects |
 | `KEEP_ALIVE_INTERVAL` | `600` | Seconds between pings |
