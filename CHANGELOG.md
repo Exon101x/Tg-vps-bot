@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.6.1 — Mini App redesign: modern glass UI
+
+* **A fresh, modern look for the whole Mini App** — the flat white 2023-style UI is gone. The app
+  now ships a cohesive glass design: aurora gradient backdrop, frosted translucent header and
+  tab dock, gradient accent buttons with glow shadows, rounded glass cards, and smooth
+  slide/fade transitions. Everything still follows the Telegram client theme — dark and light
+  are detected from `themeParams` (with a system-preference fallback) and live-switch with the
+  client; the header color matches Telegram for a native feel.
+* **New navigation**: a floating pill dock with SVG icons (Files, Servers, Console, Stats, Queue,
+  Admin) — the active tab lights up with the brand gradient. Haptic feedback on tab switches,
+  chips and toasts (`HapticFeedback`).
+* **Files**: per-type gradient icon tiles (folder, PDF, archive, image, video, audio, code,
+  document), circular icon action buttons (send / rename / delete), a breadcrumb-style path bar,
+  and an upload card with an animated striped progress bar, live percentage and byte counter.
+  Skeleton shimmer loaders replace “loading...” text everywhere; empty and error states got
+  icons. Button taps inside a row no longer leak into the row action (previously tapping
+  rename/delete could also trigger a Telegram send).
+* **Servers**: scheme tiles for SSH/FTP, active + monitored badges inline, a compact settings
+  sheet, and a hint card listing the supported target formats.
+* **Console**: a real terminal window — traffic-light dots, the active server in the title bar,
+  colored command lines and a `❯` prompt.
+* **Stats**: bento cards with icon chips and usage meters for RAM and disk (green / amber / red
+  thresholds), a full-width host card, and a scrollable segmented control for the inspector
+  views (processes, ports, docker, disk, firewall, failed, logins, updates) with a gradient
+  active pill.
+* **Queue & Admin**: colored status chips with pulse dots, retry/stop icon buttons, gradient
+  avatars for users, compact stat cards. Long values wrap at word boundaries (no more
+  mid-letter breaks); the footer credit line now scrolls with the content.
+* Zero new dependencies, zero API changes — same `webapi.py` contract, same CSP (self-hosted
+  only: no CDNs, no web fonts), all 15 test scripts still pass.
+
 ## 1.6.0 — admin panel, force-subscribe, hardened API, logo & credits
 
 * **Admin panel with the details** (`ADMINS` / `DEV_ID`): `/admin` in chat and a new **Admin** tab in
