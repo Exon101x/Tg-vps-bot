@@ -156,11 +156,13 @@ ok(len(m.sent) == 2 and b"".join(m.sent.values()) == DATA and all(len(v) <= 2.2 
 m = run_get("vps", path="d/missing.bin"); ok(not m.sent and any("does not exist" in t for t in m.texts), "4f. a missing file is a clear message")
 big = random.Random(1).randbytes(6 * MiB + 5); open(f"{SROOT}/d/seven.bin", "wb").write(big)
 asked = []
-async def fake_confirm(msg, uid, label, action): asked.append((label, action))
+async def fake_confirm(msg, uid, label, action, *args): asked.append((label, action, args))
 real_confirm = bot.confirm; bot.confirm = fake_confirm
 m = run_get("vps", override=MiB, path="d/seven.bin"); bot.confirm = real_confirm
 ok(len(asked) == 1 and "7 volumes" in asked[0][0] and not m.sent, "4g. more than 5 volumes asks for confirmation first")
-m2 = FakeMsg(); asyncio.run(asked[0][1](m2)); ok(len(m2.sent) == 7 and b"".join(m2.sent.values()) == big, "4h. confirming sends all 7 volumes")
+m2 = FakeMsg()
+asyncio.run(bot.ACTIONS[asked[0][1]](m2, UID, *asked[0][2]))
+ok(len(m2.sent) == 7 and b"".join(m2.sent.values()) == big, "4h. confirming (via the ACTIONS registry) sends all 7 volumes")
 
 # ---------------------------------------------------------------- 5. /join script on a real SSH server
 def vols(base, parts):

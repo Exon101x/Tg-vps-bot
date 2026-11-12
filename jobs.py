@@ -26,7 +26,7 @@ from util import bar, env_int, eta, human
 MAX_RETRIES = env_int("MAX_RETRIES", 5, lo=1)
 PARALLEL = SETTINGS["per_server"]
 BACKOFF = (5, 15, 45, 120, 300)  # seconds to wait before attempt 2, 3, ...
-CANCEL = set()  # ids of running jobs the user asked to stop
+SKIP_MARK = "skipped, "  # a done job's note starts with this when /ondup skip kept an existing file
 
 
 def is_permanent(e):
@@ -41,6 +41,51 @@ def is_permanent(e):
     return False
 
 
+class CancelFlag:
+    """Job ids the user asked to stop. It used to be a RAM set, so a stop requested while the
+    bot was restarting was lost and the job kept running after boot. The set is persisted as a
+    kv blob (jid -> ts) and drained on boot: anything still queued/running when the old copy
+    died is marked cancelled right away instead of resuming against the user's wishes."""
+
+    def __init__(self):
+        import persist  # late import: jobs -> persist is fine, but keep it out of the import cycle debates
+        self._st = persist.State("cancel", ttl=86400)
+        self._live = set()  # ids the running copy has seen; membership checks stay in RAM
+
+    def add(self, jid):
+        self._live.add(int(jid))
+        self._st[str(jid)] = time.time()
+
+    def __contains__(self, jid):
+        return int(jid) in self._live
+
+    def discard(self, jid):
+        self._live.discard(int(jid))
+        try:
+            del self._st[str(jid)]
+        except KeyError:
+            pass
+
+    def drain(self):
+        """Called once by Engine.start(): cancel every persisted id whose job is not finished."""
+        stopped = 0
+        for jid in list(self._st.keys()):
+            self._live.discard(int(jid))
+            j = store.get_job(int(jid))
+            if not j or j["state"] in ("done", "failed", "cancelled"):
+                del self._st[jid]  # finished meanwhile (or the row is gone): nothing to stop
+                continue
+            store.set_job(int(jid), state="cancelled", error="stopped: the bot restarted")
+            del self._st[jid]
+            stopped += 1
+        if stopped:
+            self._st.flush(force=True)
+        return stopped
+
+
+CANCEL = CancelFlag()
+
+
 class Engine:
     def __init__(self, app, max_fetch):
         self.app, self.max_fetch = app, max_fetch
@@ -49,7 +94,11 @@ class Engine:
 
     # ---- lifecycle
     def start(self):
-        """Re-queue everything that was waiting or mid-transfer when the bot last stopped."""
+        """Re-queue everything that was waiting or mid-transfer when the bot last stopped, after
+        honouring stop requests that arrived while the bot was down."""
+        stopped = CANCEL.drain()
+        if stopped:
+            logging.info("cancelled %s job(s) the user had asked to stop before the restart", stopped)
         for j in store.pending_jobs():
             resume = int(j["state"] == "running" or j["attempts"] > 0 or j["resume"])
             store.set_job(j["id"], state="queued", attempts=0, resume=resume)
@@ -197,7 +246,7 @@ class Engine:
                 note, policy = "", c.get("dup") or "overwrite"
                 if policy != "overwrite" and not resume:
                     if policy == "skip" and r.exists(dest):
-                        return f"skipped, {dest} already exists"
+                        return f"{SKIP_MARK}{dest} already exists"
                     if policy == "rename":
                         new = r.unique_name(dest)
                         if new != dest:
@@ -220,7 +269,7 @@ class Engine:
                     pass  # failed jobs keep their staged file so /retry can use it
         j = store.get_job(job["id"])
         took = f", {int(time.time() - started)}s" if started else ""
-        if state == "done" and note.startswith("skipped"):
+        if state == "done" and note.startswith(SKIP_MARK):
             text = f"⏭ {j['name']}: {note}"
         elif state == "done":
             text = f"✅ {j['dest']} → {j['server']} ({human(j['size'])}{took})" + (f"\n{note}" if note else "")

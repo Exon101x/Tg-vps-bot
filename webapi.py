@@ -47,6 +47,7 @@ import store
 import subscriptions
 import hosting
 import payments
+import persist
 from perf import describe as describe_perf
 from remote import Counting, Remote, fingerprint, load_pkey
 from util import clean_name, clean_path, env_int, human
@@ -68,7 +69,6 @@ ADMINS = set()                # Telegram ids allowed on the admin routes (bot.ma
 WEBAPP_URL = ""
 WEB_MAX = env_int("WEB_MAX_MB", 4096, lo=0) * 1024 * 1024  # 0 = no cap
 STAGE_DIR = os.path.join(tempfile.gettempdir(), "vpsbot-webuploads")
-UPLOADS = {}                  # token -> {uid, name, size, ts} for uploads being chunked in
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
 STATIC = {"app.css": "text/css; charset=utf-8", "app.js": "application/javascript; charset=utf-8",
           "logo.png": "image/png"}
@@ -548,6 +548,19 @@ async def _fetch_ssh(uid, name, cmd):
 
 
 # ---- chunked, resumable uploads: phone -> bot (staged) -> server (the queue)
+UPLOADS = persist.State("uploads", ttl=STALE_STAGE)  # token -> {uid, name, size, ts}; kv-backed so an
+# upload in progress when the bot restarted resumes instead of failing with "unknown token"
+
+
+def _prune_uploads():
+    """Drop persisted tokens whose staged file is gone (temp dir wiped, different machine): the
+    client would otherwise send chunks into a file that starts over from zero."""
+    for tok in list(UPLOADS.keys()):
+        if not os.path.exists(stage_path(tok)):
+            del UPLOADS[tok]
+    UPLOADS.flush(force=True)
+
+
 async def h_up_init(user, data):
     name = clean_name(data.get("name") or "")
     size = int_arg(data, "size")
@@ -556,6 +569,7 @@ async def h_up_init(user, data):
     if WEB_MAX and size > WEB_MAX:
         raise ApiError(f"{human(size)} is over the WEB_MAX_MB cap of {human(WEB_MAX)}")
     sweep_staged()
+    _prune_uploads()
     token = secrets.token_urlsafe(18)
     os.makedirs(STAGE_DIR, exist_ok=True)
     with open(stage_path(token), "wb"):
@@ -588,6 +602,7 @@ async def h_up_chunk(user, data, ctx):
         f.seek(0, os.SEEK_END)
         f.write(body)
     up["ts"] = time.time()
+    UPLOADS.touch()
     return {"got": os.path.getsize(p), "size": up["size"]}
 
 

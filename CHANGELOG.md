@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.8.5 — implicit state machines made explicit: every mid-chat flow survives a restart
+
+* **Seven flows that used to live only in RAM are persisted now.** Confirmations
+  (`ok:`/`no:` buttons), pending server passwords/keys from `/add`, `/multi`
+  collections, `/ask` server pickers, terminal mode, the monitor's issue state
+  and job-stop intents each used to die on every restart — a deploy mid-flow
+  silently dropped the state and the flow continued as if nothing happened (the
+  worst case: a `/term` user's next plain message ran as a shell command after a
+  restart, and a stop pressed during a restart was lost, so the job kept
+  running). New `persist.py` keeps each machine as an encrypted kv blob with its
+  own TTL, re-hydrates on boot and sweeps expired entries from the monitor
+  loop, so the bot resumes mid-chat flows instead of forgetting them.
+* **Confirm buttons carry names, not closures.** `confirm()` used to capture the
+  whole action — command text, server names, user ids — inside a Python closure
+  in a dict: unreloadable, and credentials sat in RAM after the button was
+  forgotten. The pending token now stores `{uid, ts, act, args}` with `act`
+  resolved through a seven-entry `ACTIONS` registry (`sh`, `reboot`, `run`,
+  `ban`, `broadcast`, `del`, `get`); every target re-reads its server/user from
+  the database, so a button pressed after a restart still works, and a token
+  from an older bot version degrades to "run the command again" instead of
+  crashing.
+* **Stop intents are honoured across restarts.** `Engine.start()` drains the
+  persisted cancel set first: any job that was queued or running when the old
+  copy died is marked cancelled ("stopped: the bot restarted") instead of
+  resuming against the user's wishes. Jobs that finished meanwhile are left
+  alone, and the `/ondup skip` note is now written and read through a shared
+  `SKIP_MARK` constant instead of a magic string.
+* **Mini App chunked uploads resume after a restart.** The `UPLOADS` token map
+  is a `State` now, so a phone upload in progress when the bot restarted no
+  longer fails with "unknown upload token"; tokens whose staged `.part` file no
+  longer exists (temp dir wiped, new machine) are pruned instead of silently
+  restarting the byte stream from zero.
+* **The monitor no longer re-alerts known problems after a restart.** Issue
+  state is persisted per `(uid, server)`, and the new/cleared diff is computed
+  by a pure `diff_issues()` — extracted so it is tested directly. A server that
+  was already reported as down before a deploy is not re-alerted when the bot
+  comes back.
+* **Pickers use string message ids and a sweepable basket.** `/ask` picker
+  entries are keyed by the picker message id (JSON round-trips them as strings
+  — the producer and the `pick:`/`pickc:` handlers now agree), and each user's
+  basket carries its own `ts`, so the State's TTL sweep drops idle baskets
+  whole. `/multi`'s live status message is kept as `(chat_id, message_id)`
+  instead of a Pyrogram object, making collections fully JSON-reloadable.
+* **`tests/check_state.py`** pins all of it: 30 checks over restart simulation
+  (fresh `State` over the same row), expiry sweeps, the ACTIONS registry, the
+  cancel drain and the upload prune.
+
 ## 1.8.4 — chat UI: a welcome card, a button-driven manual - and the follow-up crash fixed
 
 * **Fixed the second `/start` crash** (reported minutes after 1.8.3): `reply_long`

@@ -60,11 +60,14 @@ ok(bot.caption_dest("x\n>/etc/passwd", "a.zip") == "x", "only the first caption 
 ok(not bot.caption_dest("../../etc", "a.zip").startswith("."), "caption traversal cannot escape (clean_path)")
 
 # --- BIG-6: picker entries expire
-bot.PICK.setdefault(5, {})[1] = (1, 2, "f.bin", 10, None, "files", time.time() - bot.PICK_IDLE - 1)
-bot.PICK.setdefault(5, {})[2] = (1, 3, "fresh.bin", 10, None, "files", time.time())
+mine = bot.PICK.setdefault(5, {"ts": 0.0, "m": {}})["m"]
+mine["1"] = dict(chat_id=1, msg_id=2, name="f.bin", size=10, cap_dest=None, group="files",
+                 ts=time.time() - bot.PICK_IDLE - 1)
+mine["2"] = dict(chat_id=1, msg_id=3, name="fresh.bin", size=10, cap_dest=None, group="files",
+                 ts=time.time())
 now = time.time()
-stale = [mid for mid, info in bot.PICK[5].items() if now - info[-1] > bot.PICK_IDLE]
-ok(stale == [1] and 2 not in stale, "the picker bookkeeping marks stale entries (refreshed at PICK_IDLE)")
+stale = [mid for mid, info in mine.items() if now - info["ts"] > bot.PICK_IDLE]
+ok(stale == ["1"] and "2" not in stale, "the picker bookkeeping marks stale entries (refreshed at PICK_IDLE)")
 
 # --- BIG-7: callback data length for the longest legal server name (24 chars, NAME_RE)
 longest = "a" * 24

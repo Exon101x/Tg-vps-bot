@@ -41,6 +41,7 @@ import store
 import subscriptions
 import hosting
 import payments
+import persist
 import webapi
 from jobs import Engine, is_permanent
 from largefiles import choose_volume, join_script, order_volumes, plan_volumes, volume_name
@@ -105,14 +106,18 @@ SVC_ACTIONS = {"status", "start", "stop", "restart", "reload", "enable", "disabl
 NO_SERVER = "No server selected. Add one with /add (see /help)."
 SEM = asyncio.Semaphore(2)  # simultaneous /get downloads (uploads go through the job queue)
 
-PENDING_AUTH = {}  # uid -> server being added, waiting for password / key
-PENDING = {}       # token -> (uid, created, async action) for confirm buttons
-TERM = {}          # uid -> last activity (terminal mode)
-COLLECT = {}       # uid -> volumes being collected by /multi
-COLLECT_IDLE = 7200
-TERM_IDLE = 600
-PICK = {}          # uid -> {picker message id: (chat_id, msg_id, name, size, cap_dest, group, ts)} for /ask
-PICK_IDLE = 1800   # unanswered server choices fall out of memory after this long
+# ---- interactive state machines. These used to be plain dicts that died on every restart,
+# mid-flow; they now live in named kv blobs (see persist.py) and re-hydrate on boot.
+TERM_IDLE = 600      # terminal mode ends after this many idle seconds
+COLLECT_IDLE = 7200  # an unfinished /multi collection falls out after this long
+PICK_IDLE = 1800     # unanswered server choices fall out after this long
+CONFIRM_TTL = 300    # a confirm button older than this is expired
+PENDING_AUTH = persist.State("auth", ttl=300)           # uid -> server being added, waiting for password / key
+PENDING = persist.State("confirm", ttl=CONFIRM_TTL)     # token -> {uid, ts, act, args} for confirm buttons
+TERM = persist.State("term", ttl=TERM_IDLE)             # uid -> last activity (terminal mode)
+COLLECT = persist.State("collect", ttl=COLLECT_IDLE)    # uid -> volumes being collected by /multi
+PICK = persist.State("pick", ttl=PICK_IDLE)             # uid -> {picker msg id: {chat_id, msg_id, ...}} for /ask
+STATES = (PENDING_AUTH, PENDING, TERM, COLLECT, PICK)
 
 # Guard against fat-fingering. This is NOT a security boundary - the user already has a shell.
 DANGEROUS = re.compile(
@@ -446,12 +451,18 @@ async def remote(c, fn):
     return await asyncio.to_thread(run)
 
 
-async def confirm(msg, uid, label, action):
-    now = time.time()
-    for t in [t for t, v in PENDING.items() if now - v[1] > 300]:
-        PENDING.pop(t, None)
+# ---- confirm buttons. The action used to be a closure held in RAM: unreloadable, and it kept
+# credentials and commands captive inside it. It is now a NAME plus JSON args (see ACTIONS below
+# the targets), resolved on click, so the pending state survives restarts and holds nothing that
+# is not already in the database. run_named() re-fetches the server by name - no secrets in the blob.
+
+
+async def confirm(msg, uid, label, action, *args):
+    """Ask the user to confirm an action. `action` is a name from ACTIONS, `args` its JSON-safe
+    parameters; the returned token is what the ok/no buttons carry."""
+    PENDING.sweep()
     token = secrets.token_hex(4)
-    PENDING[token] = (uid, now, action)
+    PENDING[token] = dict(uid=uid, ts=time.time(), act=action, args=list(args))
     kb = InlineKeyboardMarkup([[Btn("✅ Confirm", callback_data=f"ok:{token}"), Btn("✖ Cancel", callback_data=f"no:{token}")]])
     await msg.reply(f"⚠️ {label}", reply_markup=kb)
 
@@ -570,7 +581,7 @@ async def run_shell(msg, uid, name, cmd, force=False):
     if not cmd:
         return
     if not force and DANGEROUS.search(cmd):
-        return await confirm(msg, uid, f"Run on {name}?\n\n{cmd}", lambda mm: run_shell(mm, uid, name, cmd, True))
+        return await confirm(msg, uid, f"Run on {name}?\n\n{cmd}", "sh", name, cmd, True)
     c = store.get_server(uid, name)
     if not c or c["scheme"] != "ssh":
         return await msg.reply("Server not found.")
@@ -605,7 +616,7 @@ async def do_reboot(msg, uid):
     c = await need(uid, msg, ssh=True)
     if c:
         name = c["name"]
-        await confirm(msg, uid, f"Reboot {name} ({c['host']})?", lambda mm: reboot_now(mm, uid, name))
+        await confirm(msg, uid, f"Reboot {name} ({c['host']})?", "reboot", name)
 
 
 async def reboot_now(msg, uid, name):
@@ -1270,14 +1281,14 @@ async def admin_cmd(_, m):
             return await m.reply("That is an admin - remove them from ADMINS first.")
         if head == "ban":
             return await confirm(m, uid, f"Ban user {target}? They lose access to the chat and the Mini App.",
-                                 lambda mm: _do_ban(mm, uid, target, True))
+                                 "ban", target, True)
         await _do_ban(m, uid, target, False)
         return
     if head == "broadcast" and rest.strip():
         text = rest.strip()[:3500]
         n = len(store.user_ids())
         return await confirm(m, uid, f"📣 Send this to {n} user(s)?\n\n{text[:600]}",
-                             lambda mm: broadcast_and_report(mm, uid, text))
+                             "broadcast", text)
     await m.reply("Usage: /admin [overview | users | user <id> | orders | ban <id> | unban <id> | broadcast <text>]")
 
 
@@ -1377,6 +1388,16 @@ async def mv(_, m):
 
 
 @app.on_message(auth & filters.command("rm"))
+async def _do_delete(mm, uid, name, path):
+    cc = store.get_server(uid, name)
+    store.log(uid, name, f"rm {path}")
+    try:
+        await remote(cc, lambda r: r.remove(path))
+        await mm.reply(f"🗑 Deleted {path}")
+    except Exception as e:
+        await mm.reply(err(e))
+
+
 async def rm(_, m):
     uid = m.from_user.id
     c = await need(uid, m)
@@ -1385,21 +1406,28 @@ async def rm(_, m):
         return
     if not path:
         return await m.reply("Usage: /rm <file or empty dir>")
-    name = c["name"]
-
-    async def do(mm):
-        cc = store.get_server(uid, name)
-        store.log(uid, name, f"rm {path}")
-        try:
-            await remote(cc, lambda r: r.remove(path))
-            await mm.reply(f"🗑 Deleted {path}")
-        except Exception as e:
-            await mm.reply(err(e))
-
-    await confirm(m, uid, f"Delete {path} on {name}?", do)
+    await confirm(m, uid, f"Delete {path} on {c['name']}?", "del", c["name"], path)
 
 
 GET_ATTEMPTS = 3
+
+
+async def _get_volumes(msg, uid, name, path, override=None):
+    """Confirm-button target for /get with more than 5 volumes: continue with confirmed=True."""
+    return await send_from_server(msg, uid, name, path, override, True)
+
+
+# What a confirm button runs when it is pressed (see confirm() above). Every target takes
+# (msg, uid, *args) and re-reads its server/user from the database - nothing is captured.
+ACTIONS = {
+    "sh": run_shell,                       # args: name, cmd, force
+    "reboot": reboot_now,                  # args: name
+    "run": run_named,                      # args: name, title, cmd[, timeout] - systemctl, apt, docker
+    "ban": _do_ban,                        # args: target, flag
+    "broadcast": broadcast_and_report,     # args: text
+    "del": _do_delete,                     # args: name, path
+    "get": _get_volumes,                   # args: name, path, override
+}
 
 
 async def send_from_server(msg, uid, name, path, override=None, confirmed=False):
@@ -1420,7 +1448,7 @@ async def send_from_server(msg, uid, name, path, override=None, confirmed=False)
     if len(plan) > 5 and not confirmed:
         await status.delete()
         return await confirm(msg, uid, f"{path} is {human(size)}: it will be sent as {len(plan)} volumes of up to {human(vol)}. Continue?",
-                             lambda mm: send_from_server(mm, uid, name, path, override, True))
+                             "get", name, path, override)
     base = clean_name(path) or "file"
     store.log(uid, name, f"get {path} ({len(plan)} volume{'s' if len(plan) > 1 else ''})")
     loop = asyncio.get_running_loop()
@@ -1576,7 +1604,7 @@ async def upgrade(_, m):
            "SUDO env DEBIAN_FRONTEND=noninteractive apt-get -y -qq upgrade 2>&1 | tail -n 25; "
            "else echo 'apt-get not found (Debian/Ubuntu only)'; fi")
     await confirm(m, uid, f"Run apt update + upgrade on {name}? This can take a few minutes and may restart services.",
-                  lambda mm: run_named(mm, uid, name, "apt upgrade", cmd, 1200))
+                  "run", name, "apt upgrade", cmd, 1200)
 
 
 @app.on_message(auth & filters.command("sh"))
@@ -1621,7 +1649,7 @@ async def service(_, m):
     title, name = f"systemctl {act} {unit}", c["name"]
     if act in ("stop", "disable"):
         warn = "\n⚠️ This can cut off your SSH access!" if unit.startswith("ssh") else ""
-        return await confirm(m, uid, f"{act.capitalize()} {unit} on {name}?{warn}", lambda mm: run_named(mm, uid, name, title, cmd))
+        return await confirm(m, uid, f"{act.capitalize()} {unit} on {name}?{warn}", "run", name, title, cmd)
     await run_cmd(m, uid, c, title, cmd)
 
 
@@ -1655,7 +1683,7 @@ async def docker(_, m):
             return await run_cmd(m, uid, c, f"docker logs {ctr}", f"SUDO docker logs --tail {n} {ctr} 2>&1")
         cmd, title = f"SUDO docker {sub} {ctr} 2>&1", f"docker {sub} {ctr}"
         if sub == "stop":
-            return await confirm(m, uid, f"Stop container {ctr} on {name}?", lambda mm: run_named(mm, uid, name, title, cmd))
+            return await confirm(m, uid, f"Stop container {ctr} on {name}?", "run", name, title, cmd)
         return await run_cmd(m, uid, c, title, cmd)
     await m.reply("Usage: /docker [ps | start|stop|restart|logs <container> [lines]]")
 
@@ -1708,13 +1736,16 @@ async def upload(_, m):
     if ask_mode(uid):  # /ask on: the user picks the destination server under each file
         servers = [r["name"] for r in store.list_servers(uid)]
         if len(servers) > 1:
-            mine = PICK.setdefault(uid, {})
+            mine = PICK.setdefault(uid, {"ts": 0.0, "m": {}})["m"]
             now = time.time()
-            for mid in [mid for mid, info in mine.items() if now - info[-1] > PICK_IDLE]:
+            for mid in [mid for mid, info in mine.items() if now - info["ts"] > PICK_IDLE]:
                 del mine[mid]
             status = await m.reply(f"📤 {name} ({human(size)}) — send to which server?", quote=True,
                                    reply_markup=pick_keyboard(servers))
-            mine[status.id] = (m.chat.id, m.id, name, size, cap_dest, group, now)
+            mine[str(status.id)] = dict(chat_id=m.chat.id, msg_id=m.id, name=name, size=size,
+                                        cap_dest=cap_dest, group=group, ts=now)
+            PICK[uid]["ts"] = now  # the uid-level ts is what the State sweep sees
+            PICK.touch()
             return
         if servers:  # exactly one server saved: nothing to choose
             c = store.get_server(uid, servers[0])
@@ -1724,7 +1755,8 @@ async def upload(_, m):
 
 
 async def collect_part(m, col):
-    """While /multi is active, files are not uploaded one by one: they are collected into one big file."""
+    """While /multi is active, files are not uploaded one by one: they are collected into one big file.
+    The live status message is kept as (chat_id, message_id) so the whole entry stays JSON-reloadable."""
     media = getattr(m, m.media.value)
     if all(i[0] != m.id for i in col["items"]):
         col["items"].append((m.id, media_name(m), getattr(media, "file_size", 0) or 0))
@@ -1732,12 +1764,15 @@ async def collect_part(m, col):
     n, total = len(col["items"]), sum(i[2] for i in col["items"])
     text = f"📎 {n} part{'s' if n > 1 else ''} collected ({human(total)}). Send more, or /done to upload them as one file. /cancel to abort."
     if col["status"] is None:
-        col["status"] = await m.reply(text, quote=True)
+        status = await m.reply(text, quote=True)
+        col["status"] = (m.chat.id, status.id)
     else:
+        chat_id, mid = col["status"]
         try:
-            await col["status"].edit_text(text)
+            await app.edit_message_text(chat_id, mid, text)
         except Exception:
-            pass
+            pass  # the counter message was deleted: collecting goes on
+    COLLECT.touch()
 
 
 @app.on_message(auth & filters.command("multi"))
@@ -1939,7 +1974,7 @@ async def on_callback(_, cq):
         return await cq.answer(f"Join {FORCE_SUB_LABEL} first", show_alert=True)
     if kind in ("ok", "no"):
         item = PENDING.pop(arg, None)
-        if not item or item[0] != uid or time.time() - item[1] > 300:
+        if not item or item["uid"] != uid or time.time() - item["ts"] > CONFIRM_TTL:
             return await cq.answer("This request expired.", show_alert=True)
         try:
             await msg.edit_reply_markup()
@@ -1948,8 +1983,11 @@ async def on_callback(_, cq):
         if kind == "no":
             await cq.answer("Cancelled")
             return await msg.reply("✖ Cancelled.")
+        action = ACTIONS.get(item["act"])
+        if not action:  # a token from a bot version that no longer knows this action
+            return await msg.reply("This request is from an older bot version - run the command again.")
         await cq.answer("Running…")
-        return await item[2](msg)
+        return await action(msg, item["uid"], *item["args"])
     if kind == "help":  # the /start card and the /help hub navigation
         await cq.answer()
         if arg == "home":
@@ -1969,22 +2007,25 @@ async def on_callback(_, cq):
         ok = store.set_active(uid, arg)
         return await cq.answer(f"Now using {arg}" if ok else "No such server", show_alert=not ok)
     if kind in ("pick", "pickc"):  # /ask: choose the destination server for a file sent earlier
-        mine = PICK.get(uid) or {}
-        info = mine.pop(msg.id, None)
+        mine = (PICK.get(uid) or {}).get("m") or {}
+        info = mine.pop(str(msg.id), None)
         if not info:
             return await cq.answer("This choice is no longer pending (it expired or the bot restarted) — send the file again.",
                                     show_alert=True)
-        chat_id, msg_id, name, size, cap_dest, group, _ = info
+        chat_id, msg_id, name, size, cap_dest, group = (info["chat_id"], info["msg_id"], info["name"],
+                                                        info["size"], info["cap_dest"], info["group"])
         if kind == "pickc":
             await cq.answer("Cancelled")
             try:
                 await msg.edit_text(f"✖ {name} cancelled")
             except Exception:
                 pass
+            PICK.touch()
             return
         c = store.get_server(uid, arg)
         if not c:
-            mine[msg.id] = info  # let the user pick another button instead of losing the file
+            mine[str(msg.id)] = info  # let the user pick another button instead of losing the file
+            PICK.touch()
             return await cq.answer(f"Server '{arg}' no longer exists — pick another one.", show_alert=True)
         await cq.answer(f"Sending to {c['name']}…")
         try:
@@ -2122,8 +2163,16 @@ def sample(c):
         return r.exec(STATS_CMD, 30)[0]
 
 
+def diff_issues(old, new):
+    """Pure diff of two issue dicts -> (new problems, cleared keys). Used by the monitor loop and
+    its tests; extracting it keeps the loop a thin shell around state + notifications."""
+    return ([v for k, v in new.items() if k not in old], [k for k in old if k not in new])
+
+
 async def monitor_loop():
-    state = {}  # (uid, server) -> {issue_key: text}
+    # issue state used to be a local dict: every restart re-alerted problems the user had already
+    # seen. It is a State now, so the monitor knows what was already reported across restarts.
+    state = persist.State("monitor")
     while True:
         await asyncio.sleep(MONITOR_INTERVAL)
         try:
@@ -2134,16 +2183,15 @@ async def monitor_loop():
         for c in servers_:
             if c["scheme"] != "ssh":
                 continue
-            key = (c["uid"], c["name"])
+            key = f"{c['uid']}:{c['name']}"
             live.add(key)
             try:
                 issues = stats_issues(parse_kv(await asyncio.wait_for(asyncio.to_thread(sample, c), 90)))
             except Exception as e:
                 issues = {"down": f"unreachable ({type(e).__name__})"}
-            old = state.get(key, {})
+            old = state.get(key) or {}
+            new, cleared = diff_issues(old, issues)
             state[key] = issues
-            new = [v for k, v in issues.items() if k not in old]
-            cleared = [k for k in old if k not in issues]
             try:
                 if new:
                     await app.send_message(c["uid"], f"🚨 {c['name']}: " + "; ".join(new))
@@ -2153,6 +2201,7 @@ async def monitor_loop():
                 logging.exception("monitor notify failed")
         for gone in [k for k in state if k not in live]:  # deleted servers / monitoring turned off
             del state[gone]
+        persist.sweep_all(STATES)  # one place, once per cycle: expire auth/term/collect/pick entries
 
 
 COMMANDS = [
@@ -2245,6 +2294,11 @@ async def main():
     await idle()  # returns on SIGINT/SIGTERM, so containers stop cleanly
     for t in tasks:
         t.cancel()
+    for s in STATES:  # interactive flows that were mid-state at shutdown are there on next boot
+        try:
+            s.flush(force=True)
+        except Exception:
+            logging.exception("state %s not saved on shutdown", s.name)
     await app.stop()
     await asyncio.to_thread(session_sync.snapshot, True)
     await asyncio.to_thread(session_sync.release_lock)  # lets the next copy start immediately
