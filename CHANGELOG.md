@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.8.9 — commands and buttons: no more dead ends
+
+* **Unknown commands get an answer, not silence.** Every unrecognized `/command` now
+  replies with a short card: up to three "did you mean …?" suggestions (prefix match
+  first, then close matches — `server` → `/servers`, `strats` → `/stats`), plus
+  buttons for the command hub and the server list. Case-insensitive, `@botname`
+  suffixes ignored, and each unknown word is answered once per hour per user so a
+  stuck client cannot spam the chat.
+* **`/use` without a name is now useful**: it shows the same tap-to-switch buttons
+  as `/servers` instead of "No such server". Tapping a server button on any card
+  refreshes that card's ▶️ marker in place, so the list always shows what is active.
+* **Every button answers.** A tap on a button the bot no longer knows (old messages
+  after an update, non-admins tapping admin buttons, stale cards after a restart)
+  now gets an explaining toast instead of an endless spinner — the callback handler
+  has a fallback answer at the end of its chain.
+* **New guessable aliases**: `/download` → `/get`, `/delete` and `/remove` → `/del`,
+  `/commands` → `/help` (the thing people type before they know about `/help`).
+* Tests: 11 new checks in `tests/check_misc.py` (suggestions, the unknown-command
+  card, the switch keyboard), full suite 19 passed / 2 skipped. Docs:
+  COMMANDS.md rows updated for the new aliases and behaviors.
+
 ## 1.8.8 — DEPLOY.md rebuilt as the complete from-scratch deployment guide
 
 * **A real walkthrough, in order.** The old page was organized by platform; the new one

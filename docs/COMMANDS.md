@@ -26,9 +26,9 @@ switched to with `/use` — file and VPS commands all act on it. Every command w
 | Command | What it does |
 |---|---|
 | `/add <name> <target>` (alias `/addvps`) | Save a server and make it active. The bot then asks for the password (or waits for an SSH key file) and pins the host key on first connect |
-| `/servers` | List your servers with inline buttons — tap to switch |
-| `/use <name>` | Switch the active server |
-| `/del <name>` | Delete a saved server (asks for confirmation) |
+| `/servers` | List your servers with inline buttons — tap to switch (the ▶️ marker follows your taps) |
+| `/use [name]` | Switch the active server — with no name it shows the same tap-to-switch buttons as `/servers` |
+| `/del <name>` (aliases `/delete`, `/remove`) | Delete a saved server (asks for confirmation) |
 | `/status` | Active server info: scheme, host, cwd, disk, monitoring state |
 | `/monitor on\|off` | Turn monitoring alerts on/off for the active server |
 | `/audit` | Your action log (recent commands, transfers, deletes) |
@@ -121,7 +121,7 @@ turn ask mode **off** before bulk sends so files queue without a tap each. The p
 | Command | What it does |
 |---|---|
 | `/fetch <url> [name]` | Download an HTTP(S) URL to the active server. On **SSH** servers the VPS pulls the file itself (curl/wget, nothing flows through the bot); on **FTP/FTPS** the bot streams it through the queue — resumable, no temp disk, `MAX_FETCH_MB` cap (0 = unlimited). SSRF-guarded: private addresses are refused, redirects re-validated hop by hop, the connection is pinned to the address that passed the check |
-| `/get <path> [-v MB]` | Send a file **from** the server to this chat. Up to `TG_MAX_MB` (default 1900) it goes as one file; bigger files are sent as `.001 .002 …` volumes of `-v` MB (default: Telegram's limit, shrunk to 85 % of free disk). Above 5 volumes the bot asks for confirmation. See [files over 2 GB](#files-over-2-gb) |
+| `/get <path> [-v MB]` (alias `/download`) | Send a file **from** the server to this chat. Up to `TG_MAX_MB` (default 1900) it goes as one file; bigger files are sent as `.001 .002 …` volumes of `-v` MB (default: Telegram's limit, shrunk to 85 % of free disk). Above 5 volumes the bot asks for confirmation. See [files over 2 GB](#files-over-2-gb) |
 | `/join <name> [--rm]` | (SSH) Reassemble `name.001 name.002 …` in the current directory on the server into `name`. The generated script checks for missing volumes, free space and size before writing anything; `--rm` deletes the volumes afterwards |
 
 ## Remote filesystem
@@ -263,11 +263,17 @@ them to an SSH server and `/join` there.
 
 | Command | What it does |
 |---|---|
-| `/start`, `/help` | The in-chat help |
+| `/start`, `/help` (alias `/commands`) | The in-chat help |
 | `/perf` | Detected CPU/RAM and the active speed profile (see [CONFIG.md](CONFIG.md#performance-tuning)) |
 | `/cancel` | Cancel an open prompt (password/key entry), a `/multi` collection or a pending confirmation |
 | `/about` | Version, uptime, database, queue length, session state, source link and developer credit |
 | `/app` | Open the Mini App (see [The Mini App](#the-mini-app)) |
+
+Mistyped a command? The bot answers every unknown `/command` with a short card: up to three
+"did you mean …?" suggestions (prefix and close-match, case-insensitive, `@botname` suffix ignored)
+plus buttons for the command hub and your server list. Each unknown command is answered once per
+hour per user — repeats stay quiet. Stale buttons on old messages (after a bot update or restart)
+explain themselves with a tap instead of spinning forever.
 
 ## The admin panel
 

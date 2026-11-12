@@ -25,6 +25,7 @@ import tempfile
 import time
 import urllib.request
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from urllib.parse import unquote, urlparse
 
 from dotenv import load_dotenv
@@ -117,7 +118,8 @@ PENDING = persist.State("confirm", ttl=CONFIRM_TTL)     # token -> {uid, ts, act
 TERM = persist.State("term", ttl=TERM_IDLE)             # uid -> last activity (terminal mode)
 COLLECT = persist.State("collect", ttl=COLLECT_IDLE)    # uid -> volumes being collected by /multi
 PICK = persist.State("pick", ttl=PICK_IDLE)             # uid -> {picker msg id: {chat_id, msg_id, ...}} for /ask
-STATES = (PENDING_AUTH, PENDING, TERM, COLLECT, PICK)
+UNKNOWN_SEEN = persist.State("unknown", ttl=3600)       # uid -> {words} already answered, so we don't nag on repeats
+STATES = (PENDING_AUTH, PENDING, TERM, COLLECT, PICK, UNKNOWN_SEEN)
 
 # Guard against fat-fingering. This is NOT a security boundary - the user already has a shell.
 DANGEROUS = re.compile(
@@ -301,6 +303,43 @@ def help_page(key, uid=None):
     title, _blurb, body = sec
     kb = InlineKeyboardMarkup([[Btn("🧭 All sections", callback_data="help:menu"), Btn("🏠 Start", callback_data="help:home")]])
     return help_fill(f"{title}\n\n{body.strip()}"), kb, ParseMode.HTML
+
+
+# every command the handlers answer to (primary + aliases), lowercase, without the slash;
+# COMMANDS (the Telegram menu list) is defined after the handlers, so resolve lazily
+COMMAND_ALIASES = ["addvps", "setftp", "pricing", "mysubscription", "host", "menu",
+                   "ps", "ports", "logins", "updates", "disk", "firewall", "failed",
+                   "download", "delete", "remove", "commands"]
+
+
+def all_commands():
+    return sorted({c for c, _d in COMMANDS} | set(COMMAND_ALIASES))
+
+
+def suggest_command(typed):
+    """'Did you mean?' for a mistyped command: case-insensitive, ignores the bot's @name suffix,
+    prefix-match first ('termi' -> term), then close matches by edit similarity ('strats' -> stats).
+    Returns up to 3 command names (no slashes), [] when nothing is close."""
+    word = typed.split("@", 1)[0].strip().lower().lstrip("/")
+    if not word:
+        return []
+    known = all_commands()
+    hits = [c for c in known if c.startswith(word)] or \
+           [c for c in known if word in c] or \
+           [c for c in known if abs(len(c) - len(word)) <= 3 and SequenceMatcher(None, word, c).ratio() >= 0.6]
+    return hits[:3]
+
+
+def unknown_command_reply(typed):
+    """The card a mistyped command gets: never silence, at most 3 suggestions, plus the two
+    buttons a lost user needs. Returns (text, keyboard)."""
+    hits = suggest_command(typed)
+    lines = ["🤔 I don't know that command."]
+    if hits:
+        lines += ["Did you mean:"] + [f"· /{c}" for c in hits]
+    lines += ["", "🧭 /help — every command, with buttons"]
+    kb = InlineKeyboardMarkup([[Btn("🧭 Commands", callback_data="help:menu"), Btn("🖥 Servers", callback_data="use:_list")]])
+    return "\n".join(lines), kb
 
 
 # ---------------------------------------------------------------- helpers
@@ -793,7 +832,7 @@ async def start(_, m):
     await m.reply(text, reply_markup=start_kb(), parse_mode=ParseMode.HTML)
 
 
-@app.on_message(auth & filters.command("help"))
+@app.on_message(auth & filters.command(["help", "commands"]))
 async def help_cmd(_, m):
     """The manual: a hub of section buttons - or /help all for everything in one go."""
     if arg_text(m).strip().lower() in ("all", "full"):
@@ -920,15 +959,31 @@ async def servers(_, m):
         lines.append(f"{mark} <b>{html.escape(r['name'])}</b>"
                      + ("  🔔" if r["monitor"] else ""))
         lines.append(f"   <code>{html.escape(target)}</code>")
+    lines += ["", "Tap to switch · /status for the active one's card"]
+    await m.reply("\n".join(lines), reply_markup=switch_kb(uid), parse_mode=ParseMode.HTML)
+
+
+def switch_kb(uid):
+    """The tap-to-switch keyboard /servers, /use (no argument) and the unknown-command card
+    share: one button per server, the active one marked ▶️, two per row. None when the user
+    has no servers yet (callers reply NO_SERVER then)."""
+    rows = store.list_servers(uid)
+    if not rows:
+        return None
+    active = store.active_name(uid)
     kb_rows = [[Btn((("▶️ " if r["name"] == active else "") + r["name"]), callback_data=f"use:{r['name']}")
                 for r in rows[i:i + 2]] for i in range(0, len(rows), 2)]
-    lines += ["", "Tap to switch · /status for the active one's card"]
-    await m.reply("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode=ParseMode.HTML)
+    return InlineKeyboardMarkup(kb_rows)
 
 
 @app.on_message(auth & filters.command("use"))
 async def use(_, m):
     name = arg_text(m)
+    if not name:
+        kb = switch_kb(m.from_user.id)
+        if not kb:
+            return await m.reply(NO_SERVER)
+        return await m.reply("🖥 Tap a server to make it the active one:", reply_markup=kb)
     ok = store.set_active(m.from_user.id, name)
     await m.reply(f"▶️ Now using {name}" if ok else "No such server. See /servers.")
 
@@ -953,7 +1008,7 @@ async def ask(_, m):
                       "buttons to pick which of your servers receives it. Tip: turn it off before bulk sends.")
 
 
-@app.on_message(auth & filters.command("del"))
+@app.on_message(auth & filters.command(["del", "delete", "remove"]))
 async def delete(_, m):
     name = arg_text(m)
     ok = store.delete_server(m.from_user.id, name)
@@ -1630,7 +1685,7 @@ async def send_from_server(msg, uid, name, path, override=None, confirmed=False)
                     f"Windows `copy /b {base}.001+{base}.002+… {base}`, or open {base}.001 in 7-Zip.")
 
 
-@app.on_message(auth & filters.command("get"))
+@app.on_message(auth & filters.command(["get", "download"]))
 async def get(_, m):
     uid = m.from_user.id
     c = await need(uid, m)
@@ -2089,7 +2144,17 @@ async def text_in(_, m):
             return await m.reply("That request expired. Run /add again.")
         return await finish_add(m, uid, p["name"], p, "password", m.text.strip())
     if m.text.startswith("/"):
-        return
+        # a real command was handled above; anything left is a typo or a guess. Answer it
+        # (with suggestions) instead of silence - and cap the spam a stuck client can make.
+        word = m.text.split(None, 1)[0]
+        if word in (UNKNOWN_SEEN.get(uid) or {}).get("w", ()):
+            return
+        seen = UNKNOWN_SEEN.setdefault(uid, {"ts": time.time(), "w": []})
+        if word not in seen["w"]:
+            seen["w"].append(word)  # cap the spam a stuck client can make
+            UNKNOWN_SEEN.touch()
+        text, kb = unknown_command_reply(word)
+        return await m.reply(text, reply_markup=kb)
     if uid in TERM:
         if time.time() - TERM[uid] > TERM_IDLE:
             TERM.pop(uid)
@@ -2151,8 +2216,22 @@ async def on_callback(_, cq):
             await msg.reply(text, reply_markup=kb, **({"parse_mode": pm} if pm else {}))
         return
     if kind == "use":
+        if arg == "_list":  # the 'Servers' button on the unknown-command card: fresh /servers list
+            await cq.answer()
+            kb = switch_kb(uid)
+            if not kb:
+                return await msg.reply(NO_SERVER)
+            return await msg.reply("🖥 Tap a server to make it the active one:", reply_markup=kb)
         ok = store.set_active(uid, arg)
-        return await cq.answer(f"Now using {arg}" if ok else "No such server", show_alert=not ok)
+        if not ok:
+            return await cq.answer(f"'{arg}' no longer exists - /servers", show_alert=True)
+        # refresh the card the button is on, so the ▶️ marker follows the choice (works on the
+        # /servers list and the /use picker alike: both mark the active name the same way)
+        try:
+            await msg.edit_reply_markup(switch_kb(uid))
+        except Exception:
+            pass  # the card is gone or not a server list: the toast still tells the user
+        return await cq.answer(f"▶️ Now using {arg}")
     if kind in ("pick", "pickc"):  # /ask: choose the destination server for a file sent earlier
         mine = (PICK.get(uid) or {}).get("m") or {}
         info = mine.pop(str(msg.id), None)
@@ -2303,6 +2382,11 @@ async def on_callback(_, cq):
             return await reply_long(msg, admin_overview_text(), parse_mode=ParseMode.HTML)
         if arg == "users":
             return await reply_long(msg, admin_users_text(), parse_mode=ParseMode.HTML)
+    # every known kind has returned by now: this button is from an older bot version, a
+    # non-admin tapping an admin button, or a stale card after a restart. A spinning
+    # button is the worst answer - one tap on the toast explains and offers /help.
+    return await cq.answer("This button no longer works here - the message is old or the bot was updated. "
+                           "Send /help for the current commands.", show_alert=True)
 
 
 # ---------------------------------------------------------------- monitoring

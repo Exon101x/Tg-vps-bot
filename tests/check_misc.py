@@ -37,6 +37,7 @@ for bad in ("http://127.0.0.1/x", "http://169.254.169.254/latest/meta-data", "ht
     except ValueError: ok(True, f"SSRF guard refuses {bad}")
 
 import bot
+import store  # for the switch_kb checks: real servers through the real store
 U = types.SimpleNamespace(username="Nihal_S", id=42)
 c = {"folder": ""}
 ok(bot.render_dest(c, U, "a.jpg", "images") == "a.jpg", "no template -> plain name")
@@ -120,6 +121,39 @@ ok({"help:menu", "pl:plans", "pl:vps", "pl:sub"} <= set(flat(bot.start_kb())),
    "the /start card links the manual hub, plans, my VPS and my plan")
 ok("<b>" in bot.welcome_text("") and "··" in bot.welcome_text(""),
    "the /start card uses bold headers and dotted alignment")
+
+# ---------------------------------------------------------------- command UX refinements
+known = bot.all_commands()
+ok("help" in known and "download" in known and "delete" in known and "commands" in known and "vps" in known,
+   f"all_commands() lists primaries and aliases ({len(known)} commands)")
+ok(bot.suggest_command("server") == ["servers"], "suggest: 'server' -> servers (prefix match)")
+ok(bot.suggest_command("strats")[0] == "stats", "suggest: 'strats' -> stats (close match)")
+ok(bot.suggest_command("/termi".lstrip("/")) == ["term"], "suggest: prefix 'termi' -> term")
+ok(bot.suggest_command("HELP@MyVpsBot") == ["help"], "suggest: case and @botname suffix are ignored")
+ok(bot.suggest_command("zzzzqqq") == [], "suggest: no absurd false positives")
+t, kb = bot.unknown_command_reply("uploadd")
+ok("uploadd" not in t and "/upload" not in t and "I don't know" in t and "help" in t,
+   "unknown-command card: apologises, never echoes gibberish, points to /help")
+ok({b.callback_data for row in kb.inline_keyboard for b in row} == {"help:menu", "use:_list"},
+   "unknown-command card: exactly the Commands and Servers buttons")
+t2, _ = bot.unknown_command_reply("del")
+ok("/del" in t2 or "/delete" in t2, "unknown-command card: a near-miss shows real suggestions")
+
+# the /use no-argument path, the /servers list and the use: callback all share switch_kb()
+for n, h in (("alpha", "h1"), ("beta", "h2"), ("gamma", "h3")):
+    store.add_server(dict(uid=5, name=n, scheme="ftp", host=h, port=21, user="u", auth="password",
+                          secret="p", cwd="", hostkey=""))
+store.set_active(5, "beta")
+kb = bot.switch_kb(5)
+labels = [b.text for row in kb.inline_keyboard for b in row]
+datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+ok(labels == ["alpha", "▶️ beta", "gamma"] and datas == ["use:alpha", "use:beta", "use:gamma"],
+   f"switch_kb: marks the active server, two per row ({labels})")
+ok(bot.switch_kb(42) is None, "switch_kb: None when the user has no servers (callers show NO_SERVER)")
+store.set_active(5, "gamma")
+kb2 = bot.switch_kb(5)
+ok([b.text for row in kb2.inline_keyboard for b in row] == ["alpha", "beta", "▶️ gamma"],
+   "switch_kb: the marker follows set_active (the refresh-on-tap path rebuilds it the same way)")
 
 # ---------------------------------------------------------------- the formatting kit
 ok(bot.kv("uptime", "3h 20m").count("·") >= 2 and "uptime" in bot.kv("uptime", "3h 20m"),
