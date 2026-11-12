@@ -73,20 +73,48 @@ ok(all(bot.tlen(c) <= 4096 for c in bot.split_text(bot.HELP)),
    f"HELP ({bot.tlen(bot.HELP)} UTF-16 units) fits Telegram after splitting - /start used to crash on it")
 ok("\n".join(bot.split_text(bot.HELP)).split() == bot.HELP.split(), "HELP splits without losing a word")
 
-class FakeChat:
-    def __init__(self): self.follow = []
-    async def send_message(self, text): self.follow.append(text)
 class FakeMsg:
-    def __init__(self): self.chat, self.replies, self.kwargs = FakeChat(), [], []
-    async def reply(self, text, **kw): self.replies.append(text); self.kwargs.append(kw)
+    """Stands in for a pyrogram Message: records every reply_long send through
+    Message.reply - the only real path. (The old fake had Chat.send_message, the
+    Telethon-style call that crashed /start live: Pyrogram Chats have no such method.)"""
+    def __init__(self): self.sent = []
+    async def reply(self, text, **kw): self.sent.append((text, kw))
 fm = FakeMsg()
 parts_big = bot.split_text(big)
 asyncio.run(bot.reply_long(fm, big, reply_markup="KB"))
-ok(len(fm.replies) == 1 and len(fm.chat.follow) == len(parts_big) - 1 and fm.kwargs[0].get("reply_markup") == "KB"
-   and fm.replies[0] == parts_big[0] and fm.chat.follow[0] == parts_big[1],
-   "reply_long: first chunk replies (with the keyboard), the rest follow into the chat in order")
+ok([t for t, _kw in fm.sent] == parts_big,
+   "reply_long: every chunk goes out through Message.reply, in order - no Chat.send_message")
+ok(fm.sent[0][1].get("reply_markup") == "KB", "reply_long: the keyboard rides the first chunk")
+ok(all(kw == {"quote": False} for _t, kw in fm.sent[1:]),
+   "reply_long: follow-ups are plain messages (quote=False, no keyboard)")
 fm = FakeMsg()
 asyncio.run(bot.reply_long(fm, "hi"))
-ok(fm.replies == ["hi"] and not fm.chat.follow, "reply_long: a short text is a single reply")
+ok([t for t, _kw in fm.sent] == ["hi"] and fm.sent[0][1] == {}, "reply_long: a short text is a single plain reply")
+
+# ---------------------------------------------------------------- the /start card and the /help hub
+ok(all(bot.tlen(bot.help_fill(body)) <= 4000 for _t, _b, body in bot.HELP_SECTIONS.values()),
+   "every manual section is one page: fits a single message with room to spare")
+ok(all(f"/{c}" in bot.HELP for c, _d in bot.COMMANDS),
+   "every command in Telegram's menu has a place in the manual")
+ok(bot.REPO_URL in bot.HELP, "the manual keeps the source link (forks are asked to keep it)")
+ok("Nihal" in bot.welcome_text("Nihal") and "Hi" in bot.welcome_text("")
+   and all(bot.tlen(bot.welcome_text(n)) <= 4000 for n in ("Nihal", "", "A" * 64)),
+   "the /start card is personal and fits a single message")
+flat = lambda kb: [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
+hub_text, hub_kb = bot.help_hub(42)
+ok(bot.tlen(hub_text) <= 4000, "the help hub fits a single message")
+ok(set(flat(hub_kb)) == {f"help:{k}" for k in bot.HELP_SECTIONS if k != "admin"} | {"help:all"},
+   "the hub buttons open exactly the non-admin sections, plus the whole-manual button")
+bot.ADMINS.add(7)
+ok("help:admin" in flat(bot.help_hub(7)[1]) and "help:admin" not in flat(bot.help_hub(8)[1]),
+   "the admin section shows for admins only")
+page_text, page_kb = bot.help_page("files", 42)
+ok(page_text.startswith("📁 Files") and set(flat(page_kb)) == {"help:menu", "help:home"},
+   "a section page has its title plus back-to-hub and back-to-start buttons")
+ok(bot.help_page("nosuch", 42)[0] == bot.help_hub(42)[0], "an unknown section button falls back to the hub")
+ok(bot.help_page("admin", 8)[0] == bot.help_hub(8)[0] and bot.help_page("admin", 7)[0] != bot.help_hub(7)[0],
+   "the admin page: admins get the page, everyone else the hub")
+ok({"help:menu", "pl:plans", "pl:vps", "pl:sub"} <= set(flat(bot.start_kb())),
+   "the /start card links the manual hub, plans, my VPS and my plan")
 
 print("ALL MISC PASSED")

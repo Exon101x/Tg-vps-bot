@@ -33,7 +33,7 @@ load_dotenv()  # a local .env file can configure everything; real environment va
 
 from pyrogram import Client, ContinuePropagation, filters, idle  # noqa: E402
 from pyrogram.enums import ParseMode
-from pyrogram.errors import AuthKeyDuplicated, Unauthorized
+from pyrogram.errors import AuthKeyDuplicated, MessageNotModified, Unauthorized
 from pyrogram.types import BotCommand, InlineKeyboardButton as Btn, InlineKeyboardMarkup, MenuButtonWebApp, WebAppInfo
 
 import session_sync
@@ -131,24 +131,18 @@ engine = Engine(app, MAX_FETCH)
 auth = filters.private & filters.user(list(ALLOWED))
 MEDIA = filters.document | filters.video | filters.audio | filters.photo | filters.voice | filters.animation | filters.video_note
 
-HELP = """🖥 VPS + file transfer bot
-
-SERVERS
+# The manual, in sections. /help shows a hub: one line per section and a button to open each
+# page (every page fits a single message by construction). /help all sends the whole manual,
+# /start shows a short welcome card with buttons instead of the old wall of text.
+HELP_SECTIONS = {
+    "servers": ("🔌 Servers", "add, switch, monitor, audit", """
 /add <name> <target> - save a server (becomes active)
    ssh://user@host[:port]  (asks for password or key file)
    ssh://user:pass@host · ftp://user:pass@host[:port][/dir] · ftps://...
 /servers - list and switch · /use <name> · /del <name>
-/status - active server info · /monitor on|off - alerts · /audit - action log · /about - bot status
-
-VPS (ssh servers)
-/vps - dashboard buttons · /stats · /ps · /ports · /logins
-/sh <cmd> - run a command (dir is remembered) · /term - terminal mode
-/service <name> [status|start|stop|restart|reload|enable|disable]
-/logs <unit> [lines] · /docker [ps|start|stop|restart|logs <name>]
-/disk · /firewall · /failed · /updates · /upgrade (apt) · /reboot
-Non-root users need passwordless sudo for service/docker/reboot actions.
-
-FILES (all servers)
+/status - active server info · /monitor on|off - alerts
+/audit - what was done, when and on which server"""),
+    "files": ("📁 Files & transfers", "stream both ways, queue, folders", """
 Send any file: it streams straight to the server (no temp disk), is queued per server,
 retried on failures and resumed from the partial file. Albums and bulk sends are fine.
 Files up to 4 GB stream directly (the sender needs Telegram Premium above 2 GB).
@@ -163,14 +157,18 @@ Caption "> path/name.ext" (or "> dir/") sets the destination.
 /multi [name] ... /done - collect the volumes of a file over 4 GB (or without Premium) and upload them as ONE file to any server
 /perf - detected CPU/RAM and the speed profile in use
 /fetch <url> [name] - the server downloads a URL (ssh) or the bot streams it (ftp); no size limit
-/app - the Mini App: manage servers, browse and upload files, a shell console and
-VPS stats from a web UI inside Telegram (needs WEBAPP_URL, the bot's public HTTPS address)
 Files over 4 GB (or over 2 GB without Premium): split them first (7-Zip volumes, or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`),
-then /multi, send all the .001 .002 ... parts, and /done: one file lands on any FTP/FTPS/SFTP server.
-
-PLANS & VPS HOSTING (buy your own VPS - host your own bots on it)
-/plans - the plans: more servers, or a VPS of your own to host bots 24/7
-/mysub - your plan, limits and expiry · /myvps - your VPS instances
+then /multi, send all the .001 .002 ... parts, and /done: one file lands on any FTP/FTPS/SFTP server."""),
+    "vps": ("🖥 VPS & SSH", "shell, services, docker, stats", """
+/vps - dashboard buttons · /stats · /ps · /ports · /logins
+/sh <cmd> - run a command (dir is remembered) · /term - terminal mode
+/service <name> [status|start|stop|restart|reload|enable|disable]
+/logs <unit> [lines] · /docker [ps|start|stop|restart|logs <name>]
+/disk · /firewall · /failed · /updates · /upgrade (apt) · /reboot
+Non-root users need passwordless sudo for service/docker/reboot actions."""),
+    "pay": ("💳 Plans & hosting", "more servers, or a VPS of your own", """
+Buy more servers - or a VPS of your own to host your bots on, 24/7:
+/plans - the plans · /mysub - your plan, limits and expiry · /myvps - your VPS instances
 /paid <reference> - confirm a payment (the UPI/PayPal/crypto reference)
 /hosting - the 60-second guide: your bot, running on your VPS, tonight
 UPI (checkout page, QR, any UPI app) and crypto (BTC, USDT, 100+ coins) are accepted
@@ -179,25 +177,82 @@ activates the second the money lands - no waiting, no /paid needed. Otherwise th
 reference flow above still works.
 VPS plans include SSH instances with a disk quota - buy, get credentials in
 seconds, add the VPS back as a server (/add myvps ssh://user@host) and manage
-it right from this chat (files, shell, services, the Mini App console).
-
-MINI APP (/app)
+it right from this chat (files, shell, services, the Mini App console)."""),
+    "app": ("📱 Mini App", "the web panel inside Telegram", """
 A web UI served by the bot itself on its health port. Sign-in is automatic: Telegram signs
 the request and the bot checks the signature, so there is no extra password. Browse files, upload
 from your phone (resumable, queued like any other upload), run shell commands, watch VPS stats -
 and the buttons appear once WEBAPP_URL points at the bot's public HTTPS address (PaaS platforms
 provide one automatically; on a plain VPS put nginx or Caddy in front for HTTPS).
-
-ADMIN (ADMINS / DEV_ID only)
+/app - open it"""),
+    "admin": ("🛠 Admin", "panel, orders, broadcast - admins only", """
 /admin - panel: overview, users and usage, orders and revenue, ban / unban, broadcast
 /admin orders - approve or decline payments (the Mini App has the same)
-The Mini App has the same panel as a tab (/app), with live cards per user.
-
-SOURCE
+The Mini App has the same panel as a tab (/app), with live cards per user."""),
+    "about": ("ℹ️ About", "bot status, source, credits", """
+/about - uptime, database, active uploads, the works
+/help - this hub · /help all - the whole manual in one go
 {REPO_URL} - fork it and run your own; please keep the link in place.
-{DEV_LINE}"""
-HELP = HELP.replace("{REPO_URL}", REPO_URL)
-HELP = HELP.replace("{DEV_LINE}", f"Developer: @{DEV_CHANNEL}" if DEV_CHANNEL else "")
+{DEV_LINE}"""),
+}
+
+
+def help_fill(text):
+    """Fill the {REPO_URL}/{DEV_LINE} placeholders of a section body (or the whole manual)."""
+    return text.replace("{REPO_URL}", REPO_URL).replace("{DEV_LINE}", f"Developer: @{DEV_CHANNEL}" if DEV_CHANNEL else "")
+
+
+HELP = help_fill("\n\n\n".join(f"{title}\n{body.strip()}" for title, _blurb, body in HELP_SECTIONS.values()))
+
+
+def welcome_text(first_name=""):
+    """The /start card: short and friendly, buttons underneath - the full manual is one tap away."""
+    who = f", {first_name[:32]}" if first_name else ""
+    return f"""👋 Hi{who}!
+
+One chat for all your servers:
+📤 Stream files between Telegram and FTP · FTPS · SFTP servers
+🖥 Run your VPS over SSH: shell, services, docker, stats
+💳 Need more? Plans and hosted VPSes, right here
+
+⚡ Quick start
+1. /add - connect a server: ssh://user@host, ftp://…, ftps://…
+2. Send a file - it uploads straight to it
+3. /vps - the SSH dashboard, with buttons
+
+🧭 Every command: /help, or the button below."""
+
+
+def start_kb():
+    """The /start card's buttons: the manual, plans, your VPS - and the Mini App as a real
+    web-app button when WEBAPP_URL is live, a how-to-enable page otherwise."""
+    rows = [[Btn("🧭 Commands", callback_data="help:menu"), Btn("💾 Plans", callback_data="pl:plans")],
+            [Btn("🚀 My VPS", callback_data="pl:vps"), Btn("👤 My plan", callback_data="pl:sub")],
+            [Btn("📱 Open the Mini App", web_app=WebAppInfo(url=WEBAPP_URL)) if WEBAPP_URL.startswith("https://")
+             else Btn("📱 Mini App - how to enable", callback_data="help:app")]]
+    return InlineKeyboardMarkup(rows)
+
+
+def help_hub(uid=None):
+    """The /help hub: one line per section, a button to open each. The admin section
+    shows for admins only. Returns (text, keyboard)."""
+    items = [(k, t, b) for k, (t, b, _body) in HELP_SECTIONS.items() if k != "admin" or uid in ADMINS]
+    rows = [[Btn(t, callback_data=f"help:{k}") for k, t, _b in items[i:i + 2]] for i in range(0, len(items), 2)]
+    rows.append([Btn("📄 All in one message", callback_data="help:all")])
+    lines = ["🧭 Help - every command, one tap away", ""] + [f"{t} - {b}" for _k, t, b in items]
+    lines.append("\n📄 Prefer one message? The last button sends the whole manual.")
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+def help_page(key, uid=None):
+    """One section of the manual as a single page with back-to-hub and back-to-start
+    buttons. Unknown keys - and the admin page for non-admins - fall back to the hub."""
+    sec = HELP_SECTIONS.get(key)
+    if not sec or (key == "admin" and uid not in ADMINS):
+        return help_hub(uid)
+    title, _blurb, body = sec
+    kb = InlineKeyboardMarkup([[Btn("🧭 All sections", callback_data="help:menu"), Btn("🏠 Start", callback_data="help:home")]])
+    return help_fill(f"{title}\n\n{body.strip()}"), kb
 
 
 # ---------------------------------------------------------------- helpers
@@ -326,12 +381,14 @@ def split_text(text, limit=MAX_TEXT):
 
 
 async def reply_long(msg, text, **kw):
-    """Reply with any text, however long: chunks go out as consecutive messages (the
-    keyboard, if any, rides the first). Without this, any text past Telegram's 4096-unit
-    cap crashes the handler with MESSAGE_TOO_LONG - /start grew into exactly that."""
+    """Reply with any text, however long: chunks go out as consecutive messages - the first
+    carries the keyboard and any other options, the rest go as plain follow-ups through
+    Message.reply(quote=False), the public API for it: Pyrogram Chat objects have no
+    send_message (that Teletron-style call crashed /start live). Without this, any text
+    past Telegram's 4096-unit cap crashes the handler with MESSAGE_TOO_LONG."""
     parts = split_text(text)
     for i, part in enumerate(parts):
-        await (msg.reply(part, **kw) if not i else msg.chat.send_message(part))
+        await msg.reply(part, **(kw if not i else {"quote": False}))
 
 
 async def send_output(msg, text, title=""):
@@ -630,10 +687,23 @@ async def gate(_, m):
 
 
 # ---------------------------------------------------------------- general commands
-@app.on_message(auth & filters.command(["start", "help"]))
+@app.on_message(auth & filters.command("start"))
 async def start(_, m):
     store.touch_user(m.from_user.id, m.from_user.first_name or "", m.from_user.username or "")
-    await reply_long(m, HELP)
+    text = welcome_text(m.from_user.first_name or "")
+    c = store.get_server(m.from_user.id)
+    if c:  # a returning user: lead with where they left off
+        text += f"\n\n🔌 Active server: {c['name']} - /servers to switch"
+    await m.reply(text, reply_markup=start_kb())
+
+
+@app.on_message(auth & filters.command("help"))
+async def help_cmd(_, m):
+    """The manual: a hub of section buttons - or /help all for everything in one go."""
+    if arg_text(m).strip().lower() in ("all", "full"):
+        return await reply_long(m, HELP)
+    text, kb = help_hub(m.from_user.id)
+    await m.reply(text, reply_markup=kb)
 
 
 @app.on_message(auth & filters.command("app"))
@@ -1880,6 +1950,21 @@ async def on_callback(_, cq):
             return await msg.reply("✖ Cancelled.")
         await cq.answer("Running…")
         return await item[2](msg)
+    if kind == "help":  # the /start card and the /help hub navigation
+        await cq.answer()
+        if arg == "home":
+            text, kb = welcome_text(cq.from_user.first_name or ""), start_kb()
+        elif arg == "all":
+            return await reply_long(msg, HELP)
+        else:
+            text, kb = help_page(arg, uid)
+        try:
+            await msg.edit_text(text, reply_markup=kb)
+        except MessageNotModified:  # tapping the button of the page you are on is not an error
+            pass
+        except Exception:  # the card is gone (deleted or too old): send a fresh one
+            await msg.reply(text, reply_markup=kb)
+        return
     if kind == "use":
         ok = store.set_active(uid, arg)
         return await cq.answer(f"Now using {arg}" if ok else "No such server", show_alert=not ok)

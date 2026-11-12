@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.8.4 — chat UI: a welcome card, a button-driven manual - and the follow-up crash fixed
+
+* **Fixed the second `/start` crash** (reported minutes after 1.8.3): `reply_long`
+  sent its follow-up chunks with `msg.chat.send_message(...)`, but Pyrogram `Chat`
+  objects have no such method — that is Telethon's API — so any text long enough to
+  split still died, now with `AttributeError`. Follow-ups now go through the public
+  API `Message.reply(part, quote=False)`: the first chunk carries the keyboard and
+  any other options, the rest are plain follow-up messages.
+* **`/start` is a welcome card now**, not a wall of text: a short hello (by name,
+  plus the active server when you have one), a 3-step quick start, and buttons —
+  Commands, Plans, My VPS, My plan, and the Mini App (a real web-app button when
+  `WEBAPP_URL` is live, a how-to-enable page otherwise).
+* **`/help` is a hub now**: the manual is seven sections (Servers, Files, VPS,
+  Plans, Mini App, Admin, About) — one line per section and a button each; pages
+  open in place with back-to-hub and back-to-start buttons, the Admin section
+  appears for admins only, and `📄 All in one message` (or `/help all`) still
+  sends the whole manual as messages. Every page fits a single message by
+  construction — the whole manual is 3983 UTF-16 units, under the cap again.
+* **Tests**: `tests/check_misc.py` grows 13 checks — `reply_long` now exercised
+  through the real `Message.reply` path (chunks in order, keyboard on the first,
+  `quote=False` follow-ups), and the new UI: section pages under the cap, every
+  Telegram-menu command has a place in the manual, hub buttons match the sections
+  exactly, admin gating for hub and pages, unknown-section fallback, start-card
+  buttons.
+
 ## 1.8.3 — /start crashed: any text over Telegram's message cap now splits safely
 
 * **Fixed the `MESSAGE_TOO_LONG` crash on `/start`** (reported live from a fresh VPS
