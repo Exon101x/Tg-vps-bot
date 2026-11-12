@@ -20,7 +20,9 @@ Python 3.10–3.12 are supported and all three are tested in CI on every push an
 
 A one-page map of how the pieces fit: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Short version: `bot.py` (Telegram layer) → `jobs.py` (queue worker) → `sources.py`/`remote.py`
-(transfer) → `store.py` → `backends.py` (SQLite/Postgres/MySQL/MongoDB). `deploy.py` and `migrate.py`
+(transfer) → `store.py` → `backends.py` (SQLite/Postgres/MySQL/MongoDB). `subscriptions.py`,
+`hosting.py` and `payments.py` handle plans, VPS provisioning and gateways on top of `store.py`;
+`persist.py` is the state-machine backbone behind every mid-chat flow. `deploy.py` and `migrate.py`
 are standalone tools; `perf.py`, `largefiles.py`, `util.py` are leaf libraries.
 
 ## Code style
@@ -38,6 +40,10 @@ are standalone tools; `perf.py`, `largefiles.py`, `util.py` are leaf libraries.
 
 * Each `tests/check_*.py` script runs in its own process, because `store.py` reads its database from the
   environment at import — add new checks as separate scripts, not into existing ones.
+* **Interactive state** (`persist.py`): anything a handler remembers between messages — a confirm
+  token, a pending password, a picker — must go into a `State` (plain JSON values, its own `ts`, a
+  TTL) so the flow survives a restart. `tests/check_state.py` re-loads each machine over the same
+  database row and must keep passing; add a check there when you add or change a machine.
 * The suite stands up a **real local FTP server and a real local SSH/SFTP server** and moves real bytes;
   prefer that over mocks for anything touching `remote.py`.
 * **Storage backends** implement the interface in `backends.py` and must pass `tests/check_contract.py`

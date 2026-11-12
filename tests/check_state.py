@@ -185,6 +185,7 @@ async def t_cancel():
 # ---------------------------------------------------------------- 8. web upload sessions survive a restart
 async def t_uploads():
     import webapi
+    os.makedirs(webapi.STAGE_DIR, exist_ok=True)  # up/init makes it before any chunk lands
     tok = "tok123"
     webapi.UPLOADS[tok] = {"uid": UID, "name": "a.iso", "size": 1000, "ts": time.time()}
     webapi.UPLOADS = restart(webapi.UPLOADS)

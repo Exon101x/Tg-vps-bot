@@ -111,10 +111,10 @@ under it — tap a server and the file is sent there (forward a file, tap, done 
 /ask         show the current state
 ```
 
-Notes: the picker needs at least two saved servers (with one there is nothing to choose); a pending choice
-expires after 30 minutes or when the bot restarts (just forward the file again); turn ask mode **off** before
-bulk sends so files queue without a tap each. The picker itself does not survive a restart because the
-files stay safely in your chat — forward them again.
+Notes: the picker needs at least two saved servers (with one there is nothing to choose); an
+unanswered choice expires after 30 minutes (the sweep drops it, and its file was never queued);
+turn ask mode **off** before bulk sends so files queue without a tap each. The picker itself is
+**persisted** — an unanswered choice survives a restart, so the tap still works after a redeploy.
 
 ### Transfer commands
 
@@ -190,9 +190,11 @@ commands with sudo automatically when needed.
 | Command | What it does |
 |---|---|
 | `/sh <command>` | Run one command on the active SSH server. The working directory is remembered between calls (see `/cd`). Output is streamed back; long output is truncated with the tail kept |
-| `/term` | Terminal mode: every message you send is a command, until you send `/term` again or stay idle for 10 minutes. Start a line with `$ ` when it begins with `/` (so Telegram does not eat it as a command) |
+| `/term` | Terminal mode: every message you send is a command, until you send `/term` again or stay idle for 10 minutes (the session survives a restart within that window — it is persisted, not in RAM). Start a line with `$ ` when it begins with `/` (so Telegram does not eat it as a command) |
 
-Both log to `/audit`. `/cancel` bails out of an open password/key prompt or a `/multi` collection.
+Both log to `/audit`. `/cancel` bails out of an open password/key prompt, terminal mode or a
+`/multi` collection — its reach is exactly the interactive flows above (a pending confirmation
+expires on its own after 5 minutes).
 
 ## The Mini App
 

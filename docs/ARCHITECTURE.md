@@ -17,8 +17,10 @@ the testing strategy. For what you can type in chat see [COMMANDS.md](COMMANDS.m
 
 1. **No temp disk for uploads.** Bytes flow from Telegram straight into the server connection; the only
    place files touch disk is `/get` staging one volume at a time.
-2. **Survive restarts.** The queue, upload progress and the Telegram session live in the database, so a
-   redeploy, a crash or a wiped-disk free-tier host loses nothing and forces no fresh login.
+2. **Survive restarts.** The queue, upload progress, the Telegram session *and every mid-chat flow*
+   (confirmations, password prompts, `/multi` collections, `/ask` pickers, terminal mode) live in the
+   database, so a redeploy, a crash or a wiped-disk free-tier host loses nothing, forces no fresh
+   login and forgets no conversation.
 3. **One codebase, every host.** Pure-Python modules + one Dockerfile; CPU/RAM detection picks sane
    buffer sizes anywhere from a 512 MB free instance to a big server.
 4. **Least surprise.** Destructive actions confirm first, every action is audited, credentials are
@@ -28,7 +30,8 @@ the testing strategy. For what you can type in chat see [COMMANDS.md](COMMANDS.m
 
 ```
 bot.py            The Telegram layer: auth gate, every /command handler, confirmation dialogs,
-                  the monitoring loop, keep-alive. Everything user-facing lives here.
+                  the monitoring loop (which also sweeps expired state machines), keep-alive.
+                  Everything user-facing lives here.
 
 webapi.py         The Mini App: the bot's HTTP port serves the web UI (webapp/) and a JSON API.
                   Telegram initData HMAC authentication (no cookies, no sessions), the file
@@ -70,6 +73,15 @@ payments.py       Payment gateways, all optional: the UPI Gateway (self-hosted U
 session_sync.py   Telegram session snapshots (encrypted into the kv table) and the single-instance
                   lock with heartbeats - the two mechanisms behind zero-downtime deploys.
 
+persist.py        The interactive state machines' backbone: one class, State, per mid-chat flow
+                  (confirmations, pending passwords, /multi collections, /ask pickers, terminal
+                  mode, monitor issues, job-stop intents, Mini App upload sessions). Each State
+                  is a named JSON document in the kv table, written through behind a 3 s debounce,
+                  re-hydrated on boot, swept for expired entries by the monitor loop, and
+                  encrypted at rest like every other kv blob. Values must be plain JSON - the
+                  class deliberately accepts only dict-like access so no live object (message
+                  pointers, closures) can slip into the blob.
+
 largefiles.py     Pure logic for >2 GB files: volume planning (/get), volume ordering (/multi),
                   and the shell script /join runs server-side.
 
@@ -92,7 +104,9 @@ healthcheck.py    What the Docker HEALTHCHECK runs: hits the health endpoint.
 Dependency direction: `bot.py` → `jobs.py` → `sources.py` + `remote.py` → `store.py` → `backends.py`;
 `subscriptions.py`, `hosting.py` and `payments.py` sit on `store.py` (hosting also uses `remote.py`
 for the node; payments' webhook handlers call back into `bot.py`'s fulfillment through `webapi.py`).
-`deploy.py`, `setup_gateway.py` and `migrate.py` are standalone tools; `perf.py`, `largefiles.py`, `util.py` are leaf libraries.
+`persist.py` sits on `store.py` beside them and is imported by `bot.py`, `webapi.py` and `jobs.py` for
+their state machines. `deploy.py`, `setup_gateway.py` and `migrate.py` are standalone tools; `perf.py`,
+`largefiles.py`, `util.py` are leaf libraries.
 `webapi.py` shares `bot.py`'s helpers through late imports (it runs inside the same process) and uses the
 same `store`/`remote`/`jobs` layers, so a web action and the equivalent chat action behave identically.
 
@@ -166,9 +180,42 @@ Telegram WebView ──HTTPS──> webapi.py on the bot's health port
 `/health` and every unknown path still answer `200 {"status":"ok"}`, so platform health checks are
 unaffected. `WEBAPP_URL` only feeds the `/app` button and the menu button - Telegram requires HTTPS.
 
+### 6. Interactive state machines (`persist.py`)
+
+Mid-chat flows are conversations with the user that outlive any single process. Eight of them used to
+be plain dicts in RAM and died silently on every restart; each is now a `State` — a named JSON document
+in the kv table, encrypted at rest with `SECRET_KEY` like every other kv blob:
+
+| State (kv key) | Holds | TTL | Written by |
+|---|---|---|---|
+| `confirm` | token → `{uid, ts, act, args}` for every confirm button | 5 min | `bot.py confirm()` |
+| `auth` | uid → server row being added, waiting for its password/key | 5 min | `bot.py /add` |
+| `term` | uid → last activity timestamp (terminal mode) | 10 min idle | `bot.py /term` |
+| `collect` | uid → the `/multi` collection (parts, live status message ids) | 2 h idle | `bot.py /multi` |
+| `pick` | uid → open `/ask` pickers: picker message id → file info | 30 min | `bot.py` file handler |
+| `monitor` | (uid, server) → already-reported issues | none (replaced each cycle) | `bot.py monitor_loop` |
+| `cancel` | job ids the user stopped (incl. during a restart) | 24 h | `jobs.py Engine` |
+| `uploads` | Mini App upload token → `{uid, name, size, ts}` + staged `.part` path | 1 day idle | `webapi.py up/*` |
+
+```
+handler mutates state → debounce 3 s → encrypted kv blob
+bot restart ──> State.load() re-hydrates every machine from the database
+monitor loop (every MONITOR_INTERVAL s) ──> sweep_all(): drop entries past their TTL
+Engine.start() ──> drains the persisted cancel set: jobs stopped mid-restart are marked
+                   cancelled instead of resuming against the user's wishes
+```
+
+The rules that keep a State reloadable forever: values must be plain JSON (message references are
+stored as `(chat_id, message_id)` pairs, confirm buttons carry an action *name* from the `ACTIONS`
+registry instead of a closure, so an old token degrades to "run the command again" rather than
+crashing), keys are normalised to strings (JSON round-trips int keys), and a serialisation check on
+every write fails loudly at the call site instead of corrupting the blob. `tests/check_state.py`
+pins all of it with 26 checks over restart simulation, expiry sweeps, the ACTIONS registry, the
+cancel drain and the upload prune.
+
 ## Database schema
 
-Five document-shaped tables (`backends.py`, identical across all four databases):
+Nine document-shaped tables (`backends.py`, identical across all four databases):
 
 | Table | Key | Contents |
 |---|---|---|
@@ -176,7 +223,11 @@ Five document-shaped tables (`backends.py`, identical across all four databases)
 | `active` | `uid` unique | The user's currently active server name |
 | `audit` | `(uid, ts)` indexed | One row per action: command, transfer, delete — what `/audit` shows |
 | `jobs` | `(uid, state)` indexed | The upload queue: chat/message ids, source reference, destination, size, uploaded, state, error, timestamps |
-| `kv` | key | Blobs: session snapshots, the instance lock |
+| `kv` | key | Blobs: session snapshots, the instance lock, and the `persist.py` state machines ([Section 6](#6-interactive-state-machines-persistpy)) |
+| `users` | `uid` unique | One row per user the bot has seen: display name, username, joined/last-seen timestamps, banned flag — what the admin panel lists |
+| `orders` | `(uid, status)` indexed | Subscription orders: plan, cents, currency, payment reference, `pending → awaiting → approved/rejected` |
+| `subs` | `uid` unique | The user's active subscription: plan and expiry (one per user; renewals extend the expiry) |
+| `allocs` | `(uid, status)` indexed | Provisioned VPS instances: host/port/user, **encrypted** credentials, cpu/ram/disk specs, status, expiry |
 
 Indexes mirror those constraints on every backend. Schema upgrades run in place on start — there is no
 migration step to run by hand.
@@ -210,11 +261,15 @@ Reporting and operational guidance: [SECURITY.md](../SECURITY.md).
   server and transfers real bytes.
 * **Contract test** (`check_contract.py`): every storage backend must satisfy the same interface contract —
   the reason all four databases behave identically.
-* **Security regression suite** (`check_security.py`, 24 checks): covers every fixed vulnerability class
+* **Security regression suite** (`check_security.py`, 26 checks): covers every fixed vulnerability class
   (SSRF pinning, FTP injection, path traversal, duplicate-policy degradation, env-parse crashes, queue
   integrity) so none of them come back.
 * **Admin panel suite** (`check_admin.py`, 40 checks): the users store, admin routes, ban enforcement on
   the API, the rate limiter, the FORCE_SUB join gate and the logo/credit assets.
+* **State machine suite** (`check_state.py`, 26 checks): every persisted flow is re-loaded over the same
+  database row (exactly what a restart does) and must answer identically — confirm tokens, pending
+  passwords, `/multi` collections, `/ask` pickers, terminal mode, monitor issues, job-stop intents,
+  Mini App upload sessions — plus the TTL sweeps that keep the blobs bounded.
 * **In-memory databases** by default; `TEST_DATABASE_URL=…` points the suite at a real database — that is
   exactly what CI does with PostgreSQL 16 on every push, across Python 3.10/3.11/3.12.
 * **Static analysis**: ruff (`make lint`), and CI refuses code that fails either layer.

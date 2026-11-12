@@ -54,6 +54,7 @@ Heroku or any VPS with Python 3.10+.
 |---|---|
 | **Direct streaming** | files go Telegram → server with **no temp disk** — parallel windowed downloads, live speed and ETA |
 | **Persistent queue** | survives restarts, retries with backoff, resumes from the server-side `.part` file |
+| **Restart-proof flows** | confirm buttons, password prompts, `/multi` collections, `/ask` pickers, terminal mode — mid-chat state is persisted, so a deploy mid-conversation loses nothing |
 | **Files up to 4 GB** | sent directly like any other file (Premium sender) — no volumes, no splitting |
 | **Files beyond 4 GB** | `/multi` + `/done` joins split volumes **on the fly** into one file on any server |
 | **Per-file server picker** | `/ask on` — forward or upload a file, tap the destination server, done |
@@ -297,9 +298,10 @@ high-latency links and big files.
 > treat those ids like root access.
 
 The design: SSH host keys pinned on first use, destructive commands ask for confirmation, every action
-lands in `/audit`, credentials are encrypted at rest, URL fetches are SSRF-guarded (host resolved once,
-connection pinned to the checked address), FTP paths are command-injection-safe. Prefer `ssh://`/`ftps://`
-over plain `ftp://`. On top of that: the Mini App verifies Telegram's `initData` HMAC signature on every
+lands in `/audit`, credentials are encrypted at rest (including a password that is mid-prompt during
+`/add` — the persisted state machines are encrypted kv blobs like everything else), URL fetches are
+SSRF-guarded (host resolved once, connection pinned to the checked address), FTP paths are
+command-injection-safe. Prefer `ssh://`/`ftps://` over plain `ftp://`. On top of that: the Mini App verifies Telegram's `initData` HMAC signature on every
 request (24 h freshness, constant-time), rate-limits every user (`WEB_RATE`), enforces admin bans in chat
 and app alike, and serves its pages with a strict CSP. Optional `FORCE_SUB` gates everything behind a
 channel subscription. Full policy and hardening checklist: [SECURITY.md](SECURITY.md).
@@ -327,7 +329,7 @@ Dependabot watches pip, Docker and GitHub Actions weekly; every bump goes throug
 <a href="docs/ARCHITECTURE.md"><b>docs/ARCHITECTURE.md</b></a>.</summary>
 
 ```text
-bot.py            Telegram handlers, start-up, keep-alive                         (~1470 lines)
+bot.py            Telegram handlers, start-up, keep-alive                                   (~2310 lines)
 webapi.py         the Mini App: HTTP server on the health port, initData auth, JSON API,
                   chunked resumable web uploads, console/stats/view endpoints
 webapp/           the Mini App UI (vanilla HTML/CSS/JS, no build step, served by webapi.py)
@@ -337,16 +339,21 @@ largefiles.py     volume planning for /get, volume ordering for /multi, the /joi
 remote.py         FTP / FTPS / SSH + SFTP client, host-key pinning, path sanitising
 store.py          domain API + Fernet encryption
 backends.py       SQLite / PostgreSQL / MySQL / MongoDB behind one interface
+subscriptions.py  the plan catalog, order lifecycle, plan limits, revenue stats
+hosting.py        VPS provisioning on the host node: credentials, quotas, expiry sweep
+payments.py       UPI Gateway / direct UPI QR / CryptAPI, signed webhooks, auto-activation
 session_sync.py   Telegram session snapshots + single-instance lock
+persist.py        the state-machine backbone: every mid-chat flow survives a restart
 perf.py           host detection and speed profiles
 deploy.py         deployment setup wizard (stdlib only)
 setup_gateway.py  payment gateway setup: guided wizard, validator, --check diagnostics, QR test (stdlib only)
 migrate.py        copy data between databases
+util.py           small shared helpers (human sizes, progress bars, path segments)
 healthcheck.py    Docker HEALTHCHECK helper
 Dockerfile, docker-compose.yml, render.yaml, heroku.yml, Procfile, deploy/vpsbot.service
 assets/           banner.svg (README), logo.jpg (bot avatar / app icon), banner.jpg (wide hero)
-tests/            16 check scripts run by pytest: local FTP + SSH servers, in-memory
-                  databases, 24 security + 22 big-file + 51 mini-app + 40 admin checks
+tests/            18 check scripts run by pytest: local FTP + SSH servers, in-memory
+                  databases, 26 security + 19 big-file + 68 mini-app + 40 admin + 26 state checks
 docs/             COMMANDS.md, CONFIG.md, DEPLOY.md, ARCHITECTURE.md
 ```
 
@@ -367,7 +374,9 @@ optional and for the hosting platform, not for Telegram.
 **What happens when the host restarts mid-upload?**
 The queue and progress live in the database. On start the bot re-enqueues pending jobs and resumes
 from the `.part` file already on the server — no re-upload from Telegram for completed ranges of
-`/fetch`, no lost jobs.
+`/fetch`, no lost jobs. Mid-chat flows survive too: an unanswered confirm button, an open password
+prompt, a `/multi` collection or a `/term` session all come back, and a stop you pressed during the
+restart is honoured — jobs that were queued or running are cancelled, not resumed.
 
 **Why did my saved servers become unreadable?**
 The `SECRET_KEY` differs from the one that encrypted them. Restore it, or re-add the servers after
@@ -391,8 +400,8 @@ Yes, with caveats (sleeps after 15 min, ephemeral disk, expiring Postgres). The 
   setups only).
 * Volume names go up to `.999` (999 volumes) — use a bigger `-v` beyond that.
 * Tested here: SQLite, PostgreSQL, FTP, SSH/SFTP and an in-memory MongoDB stand-in, across the CI
-  matrix. Not exercised: MySQL/MariaDB, a real MongoDB/Atlas, the published Docker image, live
-  Telegram production traffic.
+  matrix (Python 3.10–3.12, 18 check scripts, 500+ individual checks). Not exercised: MySQL/MariaDB,
+  a real MongoDB/Atlas, the published Docker image, live Telegram production traffic.
 
 ## License
 

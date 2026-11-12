@@ -29,7 +29,7 @@ them) should be patched by backporting the fix commit.
 | Mini App auth | Every request carries Telegram's `initData`; the HMAC-SHA256 signature is verified constant-time with `BOT_TOKEN`, `auth_date` must be fresher than 24 h — no cookies, no sessions, no secrets stored client-side |
 | Rate limiting | The app's API is a per-user token bucket (`WEB_RATE`, default 90/min) — a runaway client or a replayed `initData` gets `429` |
 | Web hardening | Static pages ship with a strict CSP (own scripts only + `telegram.org`, `object-src 'none'`, `frame-ancestors` limited to Telegram), `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`; the static route is a fixed whitelist (no traversal, no listing) |
-| Credentials at rest | Server passwords and private keys are Fernet-encrypted with `SECRET_KEY` **before** they reach any database — a stolen database alone reveals nothing |
+| Credentials at rest | Server passwords and private keys are Fernet-encrypted with `SECRET_KEY` **before** they reach any database — a stolen database alone reveals nothing. That includes a password that is mid-prompt during `/add`: the persisted state machines (`persist.py`) are encrypted kv blobs too |
 | SSH trust | Host keys are pinned on first use; a changed key is rejected (`/del` + `/add` re-pins deliberately) |
 | URL fetching | SSRF guard: private/reserved addresses refused, the host resolved **once** with the connection pinned to that exact address (closes DNS-rebinding TOCTOU), redirects re-validated hop by hop, `MAX_FETCH_MB` enforced while streaming |
 | FTP safety | Paths with line breaks are refused (FTP command injection); duplicate policies never silently degrade from `skip`/`rename` to `overwrite` |

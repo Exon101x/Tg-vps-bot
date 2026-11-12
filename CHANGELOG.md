@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.8.6 — documentation catch-up: the docs match the code again
+
+* **Every doc refreshed against the code after the 1.8.5 state-machine work.** The
+  docs had drifted: the module maps missed five modules that had grown in
+  (`persist.py`, `subscriptions.py`, `hosting.py`, `payments.py`, `util.py`),
+  the schema table still said "five tables" when the database creates nine, the
+  test-suite counts were two scripts and a hundred checks behind, and
+  COMMANDS.md still claimed the `/ask` picker "does not survive a restart" —
+  the exact thing 1.8.5 made it do.
+* **ARCHITECTURE.md gained a sixth data flow** describing the state machines:
+  which `State` holds what, its TTL and who writes it (confirmations, pending
+  passwords, `/multi` collections, `/ask` pickers, terminal mode, monitor
+  issues, job-stop intents, Mini App upload sessions), how the debounce, boot
+  re-hydration, TTL sweep and cancel drain interact, and the plain-JSON rules
+  that keep a blob reloadable forever. The dependency graph, the design goals
+  and the testing-strategy section now include `persist.py` and its suite.
+* **The database schema section now documents all nine tables** — the four
+  commerce tables (`users`, `orders`, `subs`, `allocs`) that had never been
+  listed, plus what the `kv` table really holds (session snapshots, the lock
+  *and* the state machines).
+* **Fixed `tests/check_state.py` crashing when run standalone** on a fresh
+  machine: the upload-session check wrote a staged `.part` file without
+  creating the staging directory first (in CI, `check_webapp.py` had happened
+  to create it earlier in the run). It now creates the directory exactly the
+  way the real `up/init` endpoint does.
+* **README's repository layout, feature table and FAQ caught up**: a
+  "Restart-proof flows" row, the mid-upload restart answer now covers mid-chat
+  flows and the restart-time stop, the test counts read 18 scripts / 26
+  security + 19 big-file + 68 mini-app + 40 admin + 26 state checks, and the
+  security blurb notes that a password mid-prompt in `/add` is encrypted at
+  rest like everything else. SECURITY.md's credentials-at-rest row and
+  CONTRIBUTING.md's project-layout and testing notes say the same thing, so
+  the three documents cannot drift apart silently again.
+
 ## 1.8.5 — implicit state machines made explicit: every mid-chat flow survives a restart
 
 * **Seven flows that used to live only in RAM are persisted now.** Confirmations
@@ -43,7 +77,7 @@
   basket carries its own `ts`, so the State's TTL sweep drops idle baskets
   whole. `/multi`'s live status message is kept as `(chat_id, message_id)`
   instead of a Pyrogram object, making collections fully JSON-reloadable.
-* **`tests/check_state.py`** pins all of it: 30 checks over restart simulation
+* **`tests/check_state.py`** pins all of it: 26 checks over restart simulation
   (fresh `State` over the same row), expiry sweeps, the ACTIONS registry, the
   cancel drain and the upload prune.
 
