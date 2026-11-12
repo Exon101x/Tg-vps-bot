@@ -11,8 +11,9 @@ import os
 import time
 from urllib.parse import urlparse
 
-TABLES = ("servers", "active", "audit", "jobs", "kv", "users")
+TABLES = ("servers", "active", "audit", "jobs", "kv", "users", "orders", "subs", "allocs")
 ACTIVE_STATES = ("queued", "running")
+ORDER_OPEN = ("pending", "awaiting")  # an order the user can still pay or that waits for an admin
 
 
 def normalize_url(url):
@@ -98,6 +99,28 @@ class SQLBackend:
                 Column("name", String(128), server_default=""), Column("username", String(64), server_default=""),
                 Column("joined", BigInteger, server_default="0"), Column("last_seen", BigInteger, server_default="0"),
                 Column("banned", Integer, server_default="0"),
+            ),
+            "orders": Table(  # subscription orders: pending -> awaiting (ref submitted) -> approved / rejected
+                "orders", md,
+                Column("id", Integer, primary_key=True, autoincrement=True),
+                Column("uid", BigInteger), Column("plan", String(32)),
+                Column("cents", Integer, server_default="0"), Column("currency", String(8), server_default="USD"),
+                Column("ref", String(128), server_default=""), Column("status", String(16)),
+                Column("created", BigInteger), Column("decided", BigInteger, server_default="0"),
+                Index("ix_orders_uid_status", "uid", "status"),
+            ),
+            "subs": Table(  # one active subscription per user: which plan, until when
+                "subs", md, Column("uid", BigInteger, primary_key=True, autoincrement=False),
+                Column("plan", String(32)), Column("expires", BigInteger), Column("updated", BigInteger)),
+            "allocs": Table(  # VPS instances provisioned for buyers (secret = Fernet ciphertext via store.py)
+                "allocs", md,
+                Column("id", Integer, primary_key=True, autoincrement=True),
+                Column("uid", BigInteger), Column("plan", String(32)),
+                Column("host", String(255)), Column("port", Integer), Column("user", String(32)),
+                Column("secret", Text), Column("cpu", Integer, server_default="1"), Column("ram", Integer, server_default="1024"),
+                Column("disk", Integer, server_default="10"), Column("status", String(16)),
+                Column("created", BigInteger), Column("expires", BigInteger),
+                Index("ix_allocs_uid_status", "uid", "status"),
             ),
         }
         md.create_all(self.engine)
@@ -336,6 +359,100 @@ class SQLBackend:
             banned = c.execute(select(func.count()).select_from(t).where(t.c.banned == 1)).scalar()
         return int(total), int(banned)
 
+    # ---- subscription orders / plans / VPS allocations (see subscriptions.py + hosting.py)
+    def order_add(self, row):
+        from sqlalchemy import insert
+        with self.engine.begin() as c:
+            return c.execute(insert(self.t["orders"]).values(**row)).inserted_primary_key[0]
+
+    def order_get(self, oid):
+        from sqlalchemy import select
+        return self._one(select(self.t["orders"]).where(self.t["orders"].c.id == oid))
+
+    def order_update(self, oid, fields):
+        from sqlalchemy import update
+        t = self.t["orders"]
+        with self.engine.begin() as c:
+            c.execute(update(t).where(t.c.id == oid).values(**fields))
+
+    def order_list(self, uid, limit):
+        from sqlalchemy import select
+        t = self.t["orders"]
+        return self._all(select(t).where(t.c.uid == uid).order_by(t.c.id.desc()).limit(limit))
+
+    def orders_pending(self, limit):
+        from sqlalchemy import select
+        t = self.t["orders"]
+        return self._all(select(t).where(t.c.status.in_(list(ORDER_OPEN))).order_by(t.c.id.desc()).limit(limit))
+
+    def order_counts(self):
+        from sqlalchemy import func, select
+        t = self.t["orders"]
+        with self.engine.connect() as c:
+            return {s: int(n) for s, n in c.execute(select(t.c.status, func.count()).group_by(t.c.status)).all()}
+
+    def order_revenue(self):
+        """(number of approved orders, total cents) for the admin panel."""
+        from sqlalchemy import func, select
+        t = self.t["orders"]
+        with self.engine.connect() as c:
+            n, cents = c.execute(select(func.count(), func.coalesce(func.sum(t.c.cents), 0))
+                                  .where(t.c.status == "approved")).one()
+        return int(n), int(cents)
+
+    def sub_get(self, uid):
+        from sqlalchemy import select
+        return self._one(select(self.t["subs"]).where(self.t["subs"].c.uid == uid))
+
+    def sub_set(self, row):
+        from sqlalchemy import delete, insert
+        t = self.t["subs"]
+        with self.engine.begin() as c:  # portable upsert
+            c.execute(delete(t).where(t.c.uid == row["uid"]))
+            c.execute(insert(t).values(**row))
+
+    def alloc_add(self, row):
+        from sqlalchemy import insert
+        with self.engine.begin() as c:
+            return c.execute(insert(self.t["allocs"]).values(**row)).inserted_primary_key[0]
+
+    def alloc_get(self, aid):
+        from sqlalchemy import select
+        return self._one(select(self.t["allocs"]).where(self.t["allocs"].c.id == aid))
+
+    def alloc_list(self, uid):
+        from sqlalchemy import select
+        t = self.t["allocs"]
+        return self._all(select(t).where(t.c.uid == uid).order_by(t.c.id))
+
+    def alloc_update(self, aid, fields):
+        from sqlalchemy import update
+        t = self.t["allocs"]
+        with self.engine.begin() as c:
+            c.execute(update(t).where(t.c.id == aid).values(**fields))
+
+    def alloc_active_count(self, uid):
+        from sqlalchemy import func, select
+        t = self.t["allocs"]
+        with self.engine.connect() as c:
+            return int(c.execute(select(func.count()).select_from(t)
+                                 .where(t.c.uid == uid, t.c.status == "active")).scalar())
+
+    def alloc_counts(self):
+        """(total instances, active ones) across all users."""
+        from sqlalchemy import func, select
+        t = self.t["allocs"]
+        with self.engine.connect() as c:
+            total = c.execute(select(func.count()).select_from(t)).scalar()
+            active = c.execute(select(func.count()).select_from(t).where(t.c.status == "active")).scalar()
+        return int(total), int(active)
+
+    def allocs_expiring(self, before):
+        """Active allocations whose subscription has run out - hosting.py deprovisions them."""
+        from sqlalchemy import select
+        t = self.t["allocs"]
+        return self._all(select(t).where(t.c.status == "active", t.c.expires < before))
+
     # ---- bulk copy (migrate.py)
     def dump(self):
         from sqlalchemy import select
@@ -354,8 +471,10 @@ class SQLBackend:
                 rows = data.get(name) or []
                 if rows:
                     c.execute(insert(self.t[name]), rows)
-            if self.dialect == "postgresql":  # explicit ids were inserted: move the sequence past them
-                c.execute(text("SELECT setval(pg_get_serial_sequence('jobs','id'), COALESCE((SELECT MAX(id) FROM jobs), 0) + 1, false)"))
+            if self.dialect == "postgresql":  # explicit ids were inserted: move the sequences past them
+                for name in ("jobs", "orders", "allocs"):
+                    c.execute(text(f"SELECT setval(pg_get_serial_sequence('{name}','id'), "
+                                   f"COALESCE((SELECT MAX(id) FROM {name}), 0) + 1, false)"))
 
 
 # ============================================================ MongoDB
@@ -372,6 +491,9 @@ class MongoBackend:
         self.c["active"].create_index("uid", unique=True)
         self.c["audit"].create_index([("uid", ASCENDING), ("ts", ASCENDING)])
         self.c["jobs"].create_index([("uid", ASCENDING), ("state", ASCENDING)])
+        self.c["orders"].create_index([("uid", ASCENDING), ("status", ASCENDING)])
+        self.c["allocs"].create_index([("uid", ASCENDING), ("status", ASCENDING)])
+        self.c["subs"].create_index("uid", unique=True)
 
     @staticmethod
     def _clean(doc):
@@ -533,12 +655,80 @@ class MongoBackend:
     def user_counts(self):
         return int(self.c["users"].count_documents({})), int(self.c["users"].count_documents({"banned": 1}))
 
+    # ---- subscription orders / plans / VPS allocations
+    def _next(self, name):
+        from pymongo import ReturnDocument
+        return self.counters.find_one_and_update({"_id": name}, {"$inc": {"n": 1}}, upsert=True,
+                                                 return_document=ReturnDocument.AFTER)["n"]
+
+    def order_add(self, row):
+        oid = self._next("orders")
+        self.c["orders"].insert_one({"_id": oid, **row})
+        return oid
+
+    def order_get(self, oid):
+        return self._job(self.c["orders"].find_one({"_id": oid}))
+
+    def order_update(self, oid, fields):
+        self.c["orders"].update_one({"_id": oid}, {"$set": fields})
+
+    def order_list(self, uid, limit):
+        return [self._job(d) for d in self.c["orders"].find({"uid": uid}).sort("_id", -1).limit(limit)]
+
+    def orders_pending(self, limit):
+        return [self._job(d) for d in self.c["orders"].find({"status": {"$in": list(ORDER_OPEN)}})
+                .sort("_id", -1).limit(limit)]
+
+    def order_counts(self):
+        r = list(self.c["orders"].aggregate([{"$group": {"_id": "$status", "n": {"$sum": 1}}}]))
+        return {d["_id"]: int(d["n"]) for d in r}
+
+    def order_revenue(self):
+        r = list(self.c["orders"].aggregate([{"$match": {"status": "approved"}},
+                                             {"$group": {"_id": None, "n": {"$sum": 1}, "c": {"$sum": "$cents"}}}]))
+        return (int(r[0]["n"]), int(r[0]["c"])) if r else (0, 0)
+
+    def sub_get(self, uid):
+        d = self.c["subs"].find_one({"_id": uid})
+        return self._user(d) if d else None
+
+    def sub_set(self, row):
+        d = dict(row)
+        d["_id"] = d.pop("uid")
+        self.c["subs"].replace_one({"_id": d["_id"]}, d, upsert=True)
+
+    def alloc_add(self, row):
+        aid = self._next("allocs")
+        self.c["allocs"].insert_one({"_id": aid, **row})
+        return aid
+
+    def alloc_get(self, aid):
+        return self._job(self.c["allocs"].find_one({"_id": aid}))
+
+    def alloc_list(self, uid):
+        return [self._job(d) for d in self.c["allocs"].find({"uid": uid}).sort("_id", 1)]
+
+    def alloc_update(self, aid, fields):
+        self.c["allocs"].update_one({"_id": aid}, {"$set": fields})
+
+    def alloc_active_count(self, uid):
+        return int(self.c["allocs"].count_documents({"uid": uid, "status": "active"}))
+
+    def alloc_counts(self):
+        return int(self.c["allocs"].count_documents({})), int(self.c["allocs"].count_documents({"status": "active"}))
+
+    def allocs_expiring(self, before):
+        return [self._job(d) for d in self.c["allocs"].find({"status": "active", "expires": {"$lt": before}}).sort("_id", 1)]
+
     # ---- bulk copy
     def dump(self):
         out = {n: [self._clean(d) for d in self.c[n].find({})] for n in ("servers", "active", "audit")}
         out["jobs"] = [self._job(d) for d in self.c["jobs"].find({})]
         out["kv"] = [{"k": d["_id"], "v": d["v"]} for d in self.c["kv"].find({})]
         out["users"] = [self._user(d) for d in self.c["users"].find({})]
+        out["orders"] = [self._job(d) for d in self.c["orders"].find({})]
+        out["subs"] = [self._user(d) for d in self.c["subs"].find({})]
+        out["allocs"] = [self._job(d) for d in self.c["allocs"].find({})]
         return out
 
     def is_populated(self):
@@ -568,3 +758,19 @@ class MongoBackend:
                 d["_id"] = d.pop("uid")
                 docs.append(d)
             self.c["users"].insert_many(docs)
+        for name in ("orders", "allocs"):  # autoincrement tables: id -> _id + counter
+            if data.get(name):
+                docs = []
+                for r in data[name]:
+                    d = dict(r)
+                    d["_id"] = d.pop("id")
+                    docs.append(d)
+                self.c[name].insert_many(docs)
+                self.counters.replace_one({"_id": name}, {"_id": name, "n": max(d["_id"] for d in docs)}, upsert=True)
+        if data.get("subs"):  # uid-keyed table, like users
+            docs = []
+            for r in data["subs"]:
+                d = dict(r)
+                d["_id"] = d.pop("uid")
+                docs.append(d)
+            self.c["subs"].insert_many(docs)

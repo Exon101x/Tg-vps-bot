@@ -9,6 +9,7 @@ switched to with `/use` — file and VPS commands all act on it. Every command w
 ## Table of contents
 
 - [Servers](#servers)
+- [Plans, subscriptions & VPS hosting](#plans-subscriptions--vps-hosting)
 - [File transfer](#file-transfer)
 - [Remote filesystem](#remote-filesystem)
 - [The upload queue](#the-upload-queue)
@@ -44,6 +45,36 @@ ftps://user:pass@host[:port][/upload-dir]
 
 `ssh://` servers get the full VPS management feature set; `ftp://` and `ftps://` servers get file transfer
 and the remote filesystem commands. Prefer `ftps://` and `ssh://` over plain `ftp://` (see [SECURITY.md](../SECURITY.md)).
+
+> Plans cap saved servers: Free holds 3 — `/add` refuses the 4th with an upgrade card.
+> See [CONFIG.md](CONFIG.md#subscriptions--vps-hosting) for the catalog and the host-node setup.
+
+## Plans, subscriptions & VPS hosting
+
+| Command | What it does |
+|---|---|
+| `/plans` | The plan catalog (Free · PRO · VPS tiers) with **Buy** buttons, plus what each plan includes |
+| `/mysub` | Your current plan, limits (servers, VPS slots), days left and expiry |
+| `/myvps` | Your VPS instances: status, specs, expiry and credentials (only you see them) |
+| `/paid <reference>` | After paying: attach the transaction reference to your open order |
+| `/hosting` | The 60-second guide to hosting your own bot on one of the VPSes |
+
+The flow: `/plans` → **Buy** → pay however the owner accepts (the order card lists the methods) →
+`/paid <reference>` → the owner approves → the plan (and any included VPS) activates instantly.
+Renewing extends from the current expiry and keeps existing VPSes alive.
+
+VPS plans include real SSH instances (Linux user + disk quota on the owner's node). `/hosting`:
+
+```
+1. /plans  → pick a VPS plan → Buy → /paid <reference>
+2. credentials arrive (also in /myvps, anytime)
+3. /add myvps ssh://USER@HOST      ← your VPS, as a server here
+4. send your bot's files to this chat (caption "> mybot/" for a folder)
+5. /sh python3 -m venv ~/venv
+   /sh ~/venv/bin/pip install -r ~/mybot/requirements.txt
+   /sh cd ~/mybot && nohup ~/venv/bin/python3 bot.py &
+6. watch it: /stats · /ps · /logs
+```
 
 ## File transfer
 
@@ -183,7 +214,10 @@ no session cookies. From the app you can:
   same dangerous-command confirmation as `/sh`);
 - **Stats** — the `/stats` overview cards plus every `/vps` view (processes, ports, docker, disk,
   firewall, failed services, logins, updates);
-- **Queue** — the upload queue with retry/stop, and your audit trail.
+- **Queue** — the upload queue with retry/stop, and your audit trail;
+- **Hosting** — the plan catalog with Buy buttons and the checkout box (paste the payment reference),
+  your orders with live status, and your VPS instances: specs, expiry and credentials behind a
+  show/hide toggle.
 
 Everything the app does goes through the same store, queue and audit log as the chat commands.
 
@@ -240,13 +274,18 @@ non-subscribers get a join card instead of any command — admins and the develo
 
 | Command | What it does |
 |---|---|
-| `/admin` | Overview: users, servers, uploads and bytes (total / today), queue states, staging, uptime, database, force-sub status, top movers |
+| `/admin` | Overview: users, servers, uploads and bytes (total / today), queue states, staging, uptime, database, force-sub status, **active subs, revenue, open orders, VPS counts, host-node status**, top movers |
 | `/admin overview` | The same overview (also the panel's Refresh button) |
 | `/admin users` | Every known user: name, id, uploads, volume, last seen, banned mark |
 | `/admin user <id>` | One user in detail: joined / last seen, usage, their servers, their recent audit trail |
+| `/admin orders` | Open orders (awaiting payment / awaiting approval) with one-tap Approve / Decline buttons |
 | `/admin ban <id>` | Ban a user from the chat and the Mini App (confirmation tap; admins cannot be banned) |
 | `/admin unban <id>` | Restore access |
 | `/admin broadcast <text>` | Send a message to every known user (confirmation tap; a report follows) |
 
+Approving an order activates the buyer's plan at once, extends renewals from their current expiry,
+provisions the plan's VPS instances (if a host node is configured) and delivers the credentials to
+the buyer's chat. Every decision is written to the audit log.
+
 The **Admin tab** of the Mini App shows the same numbers as live cards, the user list with ban/unban
-taps and per-user detail sheets, and the broadcast box.
+taps and per-user detail sheets, the **order list with approve/decline buttons**, and the broadcast box.

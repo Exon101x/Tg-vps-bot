@@ -219,6 +219,7 @@ function showTab(name) {
   if (name === "console") { $("#term-title").textContent = "ssh " + (ME && ME.active ? "- " + ME.active : ""); }
   if (name === "stats") loadStats();
   if (name === "queue") { loadJobs(); loadAudit(); }
+  if (name === "hosting") loadHosting();
   if (name === "admin") loadAdmin();
 }
 
@@ -648,6 +649,146 @@ async function loadAudit() {
   } catch (e) { /* the audit tab shows it on open */ }
 }
 
+/* ---------------------------------------------------------------- hosting (plans, orders, VPS) */
+const ORDER_LABEL = { pending: ["awaiting payment", "dim"], awaiting: ["awaiting approval", "run"],
+                      approved: ["approved", "on"], rejected: ["declined", "bad"], cancelled: ["cancelled", "dim"] };
+
+async function loadHosting() {
+  let d, v;
+  try {
+    [d, v] = await Promise.all([api("plans", {}), api("vps", {})]);
+  } catch (e) {
+    swap($("#host-current"), emptyState("alert", e.message));
+    return;
+  }
+  renderCurrentPlan(d);
+  renderPlans(d);
+  renderOrders(d.orders);
+  renderVps(v.vps);
+}
+
+function renderCurrentPlan(d) {
+  const box = $("#host-current");
+  box.innerHTML = "";
+  const cur = d.current;
+  const c = el("div", "card plan-cur");
+  c.appendChild(el("h3", null, "Your plan — " + cur.name + (cur.free ? "" : " \u00b7 " + d.days_left + "d left")));
+  const lim = [];
+  lim.push("servers: " + d.servers + " / " + (cur.max_servers < 0 ? "\u221e" : cur.max_servers));
+  if (cur.vps_slots || d.slots_used) lim.push("VPS: " + d.slots_used + (cur.vps_slots ? " / " + cur.vps_slots : ""));
+  c.appendChild(el("div", "dim", lim.join("  \u00b7  ")));
+  if (!cur.free) c.appendChild(el("div", "dim", "renewing extends from where you are — and keeps the VPS alive"));
+  box.appendChild(c);
+}
+
+function renderPlans(d) {
+  const box = $("#plan-list");
+  box.innerHTML = "";
+  d.plans.forEach((p) => {
+    const c = el("div", "plan" + (p.current ? " current" : ""));
+    if (p.tag) c.appendChild(el("span", "p-tag", p.tag));
+    c.appendChild(el("div", "p-name", p.name + (p.current ? "  \u2713" : "")));
+    const price = el("div", "p-price", p.free ? "free" : String(p.price));
+    c.appendChild(price);
+    c.appendChild(el("div", "p-per", p.free ? "no card needed" : p.currency + " / " + p.days + " days"));
+    if (p.desc) c.appendChild(el("div", "p-desc", p.desc));
+    const lim = (p.max_servers < 0 ? "\u221e servers" : p.max_servers + " servers")
+      + (p.vps_slots ? " \u00b7 " + p.vps_slots + "\u00d7 VPS (" + p.vps_cpu + " vCPU " + p.vps_ram + " MB " + p.vps_disk + " GB)" : "");
+    c.appendChild(el("div", "p-lim", lim));
+    if (!p.free) {
+      const b = el("button", "btn primary", p.current ? "Renew / extend" : "Buy");
+      b.onclick = () => buyPlan(p);
+      c.appendChild(b);
+    } else {
+      c.appendChild(el("div", "p-free dim", p.current ? "current plan" : "automatic"));
+    }
+    box.appendChild(c);
+  });
+}
+
+async function buyPlan(p) {
+  let r;
+  try { r = await api("plans/order", { plan: p.key }); }
+  catch (e) { return toast(e.message, true); }
+  const box = $("#pay-box");
+  box.classList.remove("hidden");
+  $("#pay-title").textContent = "Order #" + r.order.id + " \u00b7 " + r.order.name + " \u00b7 " + r.order.price + " " + r.order.currency;
+  $("#pay-info").textContent = r.payment_info;
+  $("#pay-ref").value = "";
+  box.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+$("#pay-send").onclick = async () => {
+  const ref = $("#pay-ref").value.trim();
+  if (!ref) return toast("paste the payment reference first", true);
+  try {
+    await api("plans/paid", { ref });
+    toast("reference sent — the owner approves it shortly");
+    $("#pay-box").classList.add("hidden");
+    loadHosting();
+  } catch (e) { toast(e.message, true); }
+};
+
+function renderOrders(orders) {
+  const box = $("#order-list");
+  box.innerHTML = "";
+  if (!orders.length) { box.appendChild(emptyState("inbox", "No orders yet. Pick a plan — this lists them.")); return; }
+  orders.forEach((o) => {
+    const row = el("div", "row");
+    const mid = el("div", "grow");
+    const head = el("div", "head-row");
+    const [label, cls] = ORDER_LABEL[o.status] || [o.status, "dim"];
+    head.appendChild(el("span", "badge " + cls, label));
+    head.appendChild(el("span", null, "#" + o.id + " " + o.name));
+    mid.appendChild(head);
+    mid.appendChild(el("div", "sub2", o.price + " " + o.currency + (o.ref ? " \u00b7 ref " + o.ref : "") + " \u00b7 " + timeAgo(o.created)));
+    row.appendChild(mid);
+    box.appendChild(row);
+  });
+}
+
+function renderVps(vps) {
+  const box = $("#vps-list");
+  box.innerHTML = "";
+  if (!vps.length) {
+    box.appendChild(emptyState("layers", "No VPS yet. Plans marked “VPS” include real SSH instances — buy one and host your own bots 24/7."));
+    return;
+  }
+  vps.forEach((a) => {
+    const c = el("div", "card vps-card");
+    const head = el("div", "head-row");
+    const live = a.status === "active" && a.expires * 1000 > Date.now();
+    head.appendChild(el("span", "badge " + (live ? "on" : "bad"), live ? "active" : a.status));
+    head.appendChild(el("span", null, a.user + "@" + a.host));
+    c.appendChild(head);
+    c.appendChild(el("div", "sub2", a.cpu + " vCPU \u00b7 " + a.ram + " MB \u00b7 " + a.disk + " GB \u00b7 ssh port " + a.port
+      + " \u00b7 " + (live ? "until " + new Date(a.expires * 1000).toISOString().slice(0, 10) : "gone")));
+    if (live) {
+      c.appendChild(credRow("user", a.user));
+      c.appendChild(credRow("password", a.password));
+      c.appendChild(el("div", "dim", "add it as a server: ssh://" + a.user + "@" + a.host + " — then upload files and run your bot from here"));
+    }
+    box.appendChild(c);
+  });
+}
+
+function credRow(kind, value) {
+  const r = el("div", "cred");
+  r.appendChild(el("span", "dim", kind));
+  const v = el("span", "grow", "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022");
+  r.appendChild(v);
+  const eye = el("button", "ibtn", "show");
+  let shown = false;
+  eye.onclick = (e) => {
+    e.stopPropagation();
+    shown = !shown;
+    v.textContent = shown ? value : "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
+    eye.textContent = shown ? "hide" : "show";
+  };
+  r.appendChild(eye);
+  return r;
+}
+
 /* ---------------------------------------------------------------- nav */
 document.querySelectorAll("nav#tabs .tab").forEach((t) => { t.onclick = () => showTab(t.dataset.tab); });
 $("#srv-chip").onclick = () => showTab("servers");
@@ -663,6 +804,43 @@ async function loadAdmin() {
   catch (e) { swap(cards, emptyState("alert", e.message)); }
   try { renderAdminUsers(await api("admin/users", {})); }
   catch (e) { /* the overview already said it */ }
+  try { renderAdminOrders(await api("admin/orders", {})); }
+  catch (e) { /* shown in the overview card */ }
+}
+
+function renderAdminOrders(d) {
+  const box = $("#adm-orders");
+  box.innerHTML = "";
+  if (!d.orders.length) { box.appendChild(emptyState("inbox", "No open orders — buyers land here the moment they confirm a payment.")); return; }
+  d.orders.forEach((o) => {
+    const row = el("div", "row");
+    const mid = el("div", "grow");
+    const head = el("div", "head-row");
+    const [label, cls] = ORDER_LABEL[o.status] || [o.status, "dim"];
+    head.appendChild(el("span", "badge " + cls, label));
+    head.appendChild(el("span", null, "#" + o.id + " " + o.name + " \u00b7 " + o.price + " " + o.currency));
+    mid.appendChild(head);
+    mid.appendChild(el("div", "sub2", "#" + o.uid + (o.ref ? " \u00b7 ref " + o.ref : "")));
+    row.appendChild(mid);
+    if (o.status === "awaiting") {
+      const mini = el("div", "mini");
+      mini.onclick = (e) => e.stopPropagation();
+      const yes = el("button", "ibtn send", "\u2713");
+      yes.title = "Approve";
+      const no = el("button", "ibtn del", "\u2715");
+      no.title = "Decline";
+      const decide = async (action) => {
+        try { await api("admin/order", { id: o.id, action }); toast("order #" + o.id + " " + (action === "approve" ? "approved" : "declined")); loadAdmin(); }
+        catch (e) { toast(e.message, true); }
+      };
+      yes.onclick = () => decide("approve");
+      no.onclick = () => decide("reject");
+      mini.appendChild(yes);
+      mini.appendChild(no);
+      row.appendChild(mini);
+    }
+    box.appendChild(row);
+  });
 }
 
 function fmtUptime(s) {
@@ -696,6 +874,11 @@ function renderAdminOverview(d) {
   add("shield", "force-sub", d.bot.force_sub);
   add("layers", "staged", d.staging.files + " \u00b7 " + human(d.staging.bytes || 0));
   add("chart", "today / 7d", (d.done.day[0] || 0) + " / " + (d.done.week[0] || 0));
+  if (d.subs) {
+    add("mega", "subs active", (d.subs.subs_active || 0) + (d.subs.subs_expired ? " (" + d.subs.subs_expired + " lapsed)" : ""));
+    add("check", "revenue", d.subs.revenue || "0");
+    add("layers", "VPS", (d.subs.vps_active || 0) + " / " + (d.subs.vps_total || 0) + " active");
+  }
   const top = $("#adm-top");
   top.textContent = (d.top || []).map((t) => {
     const who = (t.uid === (ME.user && ME.user.id) ? "you" : "#" + t.uid);

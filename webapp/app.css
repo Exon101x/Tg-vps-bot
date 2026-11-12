@@ -558,3 +558,43 @@ footer#foot {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------------------------------------------------------------- hosting (plans, orders, VPS) */
+.plans { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; margin-bottom: 16px; }
+.plan {
+  position: relative; border: 1px solid var(--border); border-radius: 18px; padding: 15px 14px 13px;
+  background: var(--surface); display: flex; flex-direction: column; gap: 4px; overflow: hidden;
+}
+.plan::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 2.5px; background: var(--grad);
+  opacity: 0; transition: opacity .25s;
+}
+.plan:hover::before, .plan.current::before { opacity: 1; }
+.plan.current { border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+.plan .p-name { font-weight: 700; font-size: 14px; letter-spacing: -.01em; padding-right: 44px; }
+.plan .p-price {
+  font-size: 22px; font-weight: 800; letter-spacing: -.03em; line-height: 1.15;
+  background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.plan .p-per { color: var(--dim); font-size: 11px; margin-bottom: 3px; }
+.plan .p-desc { color: var(--dim); font-size: 11.5px; line-height: 1.4; }
+.plan .p-lim { font-family: var(--mono); font-size: 10.5px; color: var(--dim); margin-top: 2px; }
+.plan .p-tag {
+  position: absolute; top: 10px; right: 10px; font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
+  text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: var(--grad); color: #fff;
+}
+.plan .btn { margin-top: 9px; }
+.plan .p-free { font-size: 11.5px; margin-top: 9px; text-align: center; }
+.plan-cur h3 { display: flex; align-items: center; gap: 8px; }
+.vps-card .head-row { margin-bottom: 3px; }
+.cred {
+  display: flex; align-items: center; gap: 9px; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 11px; padding: 7px 10px; font-family: var(--mono); font-size: 12.5px; margin-top: 7px;
+  -webkit-user-select: all; user-select: all;
+}
+.cred .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: .04em; }
+.cred .dim { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; flex: none; }
+.cred .ibtn { font-size: 11px; padding: 4px 10px; }
+#pay-box { margin: 12px 0 16px; }
+#pay-box .dim { line-height: 1.5; margin-bottom: 10px; white-space: pre-line; }
+@media (max-width: 379px) { .plans { grid-template-columns: 1fr; } }

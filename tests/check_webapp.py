@@ -12,6 +12,7 @@ os.environ.update(SECRET_KEY=Fernet.generate_key().decode(), DATABASE_URL=f"sqli
                   ALLOWED_USERS="7", WEB_RATE="600", LOG_LEVEL="WARNING", SESSION_DIR=os.path.join(TMP, "sess"))
 import asyncssh, store, webapi  # noqa: E402
 import bot  # noqa: E402,F401  (webapi imports it lazily at call time: it must load here, with the env above)
+import hosting  # noqa: E402
 import jobs  # noqa: E402
 
 ok = lambda cond, msg: print(("PASS " if cond else "FAIL ") + msg) or (cond or sys.exit(1))
@@ -200,6 +201,55 @@ ok(not os.path.exists(old), "10b. day-old staging leftovers are swept away")
 # audit trail picked up the web actions
 ok(any("web:" in (a["action"] or "") for a in store.recent_log(UID, 30)), "11. every web action landed in the audit log")
 ok(any(a["server"] == "vps" and "echo hello" in a["action"] for a in store.recent_log(UID, 30)), "11b. console commands are audited too")
+
+# ---------------------------------------------------------------- 5. plans / orders / VPS hosting, end to end
+st, r = authed("plans")
+ok(st == 200 and any(p["key"] == "vps1" for p in r["plans"]) and r["current"]["key"] == "free"
+   and r["orders"] == [] and r["slots_used"] == 0 and r["host_node"] is False,
+   "13. plans: the catalog, the free current plan, no orders, node unconfigured")
+ok(authed("plans/order", {"plan": "free"})[0] == 400, "13b. the free plan cannot be bought")
+ok(authed("plans/order", {"plan": "nope"})[0] == 400, "13c. an unknown plan is a clean 400")
+st, r = authed("plans/order", {"plan": "vps1"})
+ok(st == 200 and r["order"]["status"] == "pending" and r["order"]["price"] == 5 and "/paid" in r["payment_info"],
+   "13d. Buy opens a pending order with the payment instructions")
+oid = r["order"]["id"]
+ok(authed("plans/paid", {"ref": ""})[0] == 400, "13e. an empty reference is a clean 400")
+st, r = authed("plans/paid", {"ref": "UPI-WEB-1"})
+ok(st == 200 and r["order"]["status"] == "awaiting" and r["order"]["ref"] == "UPI-WEB-1", "13f. the reference lands on the order")
+ok(authed("vps")[1]["vps"] == [], "13g. no VPS before approval")
+
+# non-admins get 403 on the admin order routes
+ok(authed("admin/orders")[0] == 403, "14. admin/orders is admins-only")
+ok(authed("admin/order", {"id": oid, "action": "approve"})[0] == 403, "14b. admin/order is admins-only")
+
+# become the admin (same id, now in webapi.ADMINS) and point the host node at the local SSH server
+hosting.NODE_HOST, hosting.NODE_PORT, hosting.NODE_USER, hosting.NODE_PASS = "127.0.0.1", info["port"], "root", "pw"
+hosting.PUBLIC_HOST = "127.0.0.1"
+hosting.PROVISION_CMD = "echo provisioned {user} {pass} {cpu} {ram} {disk}"
+hosting.DEPROVISION_CMD = "echo deprovisioned {user}"
+webapi.configure(app=None, engine=webapi.ENGINE, token=TOKEN, allowed={UID}, webapp_url="", admins={UID})
+st, r = authed("admin/orders")
+ok(st == 200 and any(o["id"] == oid and o["status"] == "awaiting" for o in r["orders"]), "15. the awaiting order shows in admin/orders")
+ok(authed("admin/order", {"id": oid, "action": "maybe"})[0] == 400, "15b. a bad action is a clean 400")
+st, r = authed("admin/order", {"id": oid, "action": "approve"})
+ok(st == 200 and r["order"]["status"] == "approved", "15c. admin/order approves the order")
+st, r = authed("plans")
+ok(r["current"]["key"] == "vps1" and r["days_left"] >= 29 and r["slots_used"] == 1, "16. the buyer is on vps1 with 1 VPS slot used")
+st, r = authed("vps")
+ok(st == 200 and len(r["vps"]) == 1 and r["vps"][0]["status"] == "active" and r["vps"][0]["host"] == "127.0.0.1"
+   and r["vps"][0]["password"].isalnum() and len(r["vps"][0]["password"]) == 16,
+   f"16b. the VPS was provisioned over real SSH and lists with credentials {r['vps']}")
+ok(r["vps"][0]["cpu"] == 1 and r["vps"][0]["ram"] == 1024 and r["vps"][0]["disk"] == 15, "16c. the plan's specs are on the instance")
+st, r = authed("admin/overview")
+ok(st == 200 and r["subs"]["subs_active"] == 1 and r["subs"]["vps_active"] == 1 and "USD" in r["subs"]["revenue"], "16d. the admin overview counts subs, revenue and VPSes")
+
+# expiry sweep removes the instance from the node and notifies the buyer
+for a in store.alloc_list(UID):
+    store.alloc_set(a["id"], expires=int(time.time()) - 5)
+notes = hosting.sweep()
+ok(len(notes) == 1 and notes[0][0] == UID and "removed" in notes[0][1] and store.alloc_list(UID)[0]["status"] == "expired",
+   "17. the sweep deprovisions the expired instance and returns the buyer's notification")
+
 dockerfile = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Dockerfile")).read()
-ok("COPY webapp/" in dockerfile, "12. the Docker image ships the webapp/ assets (else /app would 404 in containers)")
+ok("COPY webapp/" in dockerfile, "18. the Docker image ships the webapp/ assets (else /app would 404 in containers)")
 print("ALL WEBAPP CHECKS PASSED")

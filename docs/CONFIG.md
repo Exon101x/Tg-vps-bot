@@ -14,6 +14,7 @@ variable stops startup, with a clear message.
 - [Database](#database)
 - [Hosting and runtime](#hosting-and-runtime)
 - [Monitoring](#monitoring)
+- [Subscriptions & VPS hosting](#subscriptions--vps-hosting)
 - [Mini App authentication](#mini-app-authentication)
 - [Transfer limits](#transfer-limits)
 - [Performance tuning](#performance-tuning)
@@ -66,12 +67,59 @@ Tables are created automatically and older databases upgrade in place. To move b
 Applies to servers with `/monitor on` (SSH). The loop runs every `MONITOR_INTERVAL` seconds and alerts when:
 the server is unreachable, disk usage ≥ `DISK_ALERT` %, memory ≥ `MEM_ALERT` %, or load > 2 × cores.
 State is per server: an alert fires once when it appears and once more when it clears, not every cycle.
+The same loop sweeps expired VPS instances (see below): they are removed from the host node and
+the buyer is notified.
 
 | Variable | Default | Range | Meaning |
 |---|---|---|---|
 | `MONITOR_INTERVAL` | `300` | ≥ 30 | Seconds between checks |
 | `DISK_ALERT` | `90` | 1–100 | Disk % that triggers an alert |
 | `MEM_ALERT` | `90` | 1–100 | Memory % that triggers an alert |
+
+## Subscriptions & VPS hosting
+
+`/plans` sells tiers — including plans with real VPS instances buyers can host their own bots on.
+Everything is optional: with none of these set, users are simply on the Free plan (capped at 3 saved
+servers) and `/plans` shows the catalog without a way to pay.
+
+The flow: `/plans` → **Buy** (an order opens) → the buyer pays however you accept → `/paid <reference>`
+→ you (or any `ADMINS`) get Approve/Decline buttons → approval activates the plan, extends renewals
+from the current expiry, provisions the plan's VPS instances and delivers credentials to the buyer.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SUBSCRIPTION_PLANS` | built-in catalog | JSON array replacing the whole catalog. Fields: `key`, `name`, `price`, `days`, `max_servers` (`-1` = unlimited), `vps_slots`, `vps_cpu`, `vps_ram` (MB), `vps_disk` (GB), `tag`, `desc`, `order`. The `free` key is always present (it is what users fall back to). Bad JSON logs a warning and keeps the defaults |
+| `SUBSCRIPTION_CURRENCY` | `USD` | Display currency for prices and orders (prices are stored in whole cents) |
+| `PAYMENT_INFO` | generic text | Checkout instructions; supports `{amount}`, `{currency}`, `{plan}`, `{days}`. Put your UPI / PayPal / crypto / Stars links here |
+| `VPS_NODE_HOST` | unset | **The host node** — the machine included VPSes are created on. Without it, VPS plans still activate but instances wait (the admin panel shows the warning) |
+| `VPS_NODE_PORT` | `22` | SSH port of the host node |
+| `VPS_NODE_USER` | `root` | Node login; anything other than `root` gets `sudo -n ` in front of every command (needs passwordless sudo) |
+| `VPS_NODE_PASS` | unset | Node password — or use a key instead |
+| `VPS_NODE_KEY` | unset | Path to a private key file for the node (read at provision time) |
+| `VPS_PUBLIC_HOST` | `VPS_NODE_HOST` | The address buyers connect to — set it when the node sits behind NAT / a proxy |
+| `VPS_SSH_PORT` | `22` | The SSH port of the created instances (what buyers use) |
+| `VPS_PROVISION_CMD` | `useradd …` | Provisioning template. Placeholders: `{user}`, `{pass}`, `{cpu}`, `{ram}`, `{disk}`. Default creates a Linux user with a password and a `setquota` disk quota (best effort) |
+| `VPS_DEPROVISION_CMD` | `userdel -rf {user}` | Removal template, run when a subscription lapses or an admin revokes |
+
+Security notes: the node is **your** infrastructure, configured by env vars — never a user-supplied
+address. Instance usernames (lowercase alnum, letter-first, ≤ 16 chars) and passwords (16 chars,
+letters+digits ≈ 95 bits) are alnum-only, so nothing a buyer controls can inject into the provisioning
+shell command. Passwords are Fernet-encrypted at rest (`SECRET_KEY`), shown only to their owner
+(`/myvps` and the app's **Hosting** tab). Override the two templates to provision LXC containers,
+Docker sandboxes or Proxmox CTs instead of system users.
+
+Default catalog (all replaceable via `SUBSCRIPTION_PLANS`):
+
+| Key | Name | Price | Servers | VPS |
+|---|---|---|---|---|
+| `free` | Free | — | 3 | — |
+| `pro` | PRO | 2.50 / 30 d | 15 | — |
+| `vps1` | VPS Starter | 5.00 / 30 d | 25 | 1 × (1 vCPU / 1 GB / 15 GB) |
+| `vps2` | VPS Pro | 10.00 / 30 d | 50 | 2 × (2 vCPU / 2 GB / 40 GB) |
+
+> Telegram Stars invoicing needs a Bot-API layer newer than this bot's MTProto stack (pyrogram),
+> so payments use the assisted flow above. Every order, decision and provisioning event is in the
+> audit log and the admin panel (`/admin orders`, revenue in the overview).
 
 ## Mini App authentication
 
@@ -88,6 +136,12 @@ its own verified signature. See [ARCHITECTURE.md](ARCHITECTURE.md#the-mini-app-w
 | `TG_MAX_MB` | `1900` | Largest single file `/get` sends; anything bigger goes out as `.001 .002 …` volumes. Telegram's hard cap is 2 GB for bots — leave headroom |
 | `MAX_FETCH_MB` | `0` | Cap in MB for `/fetch` downloads streamed **through** the bot (FTP/FTPS targets). `0` = no limit. SSH servers download by themselves and ignore this. Enforced even without a `Content-Length` |
 | `MAX_RETRIES` | `5` | Attempts per queued upload before it is marked failed (retryable via `/retry`) |
+
+### Free-plan server cap
+
+Without a subscription every user is on the Free plan: **3 saved servers**. `/add` (and the Mini App)
+refuse the 4th with an upgrade card. Paid tiers lift the cap; `max_servers: -1` in `SUBSCRIPTION_PLANS`
+means unlimited.
 
 ## Performance tuning
 

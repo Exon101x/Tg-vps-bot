@@ -260,6 +260,108 @@ def jobs_by_state():
     return B.jobs_state_counts()
 
 
+# ---- subscription orders / plans / VPS allocations (subscriptions.py + hosting.py)
+_ORDER_FIELDS = {"ref", "status", "decided", "cents", "currency"}
+_ALLOC_FIELDS = {"status", "expires", "host", "port", "user", "secret", "cpu", "ram", "disk"}
+
+
+def order_add(uid, plan, cents, currency):
+    now = int(time.time())
+    return B.order_add(dict(uid=uid, plan=plan, cents=int(cents), currency=currency[:8], ref="",
+                            status="pending", created=now, decided=0))
+
+
+def _order(o):
+    if not o:
+        return None
+    o = dict(o)
+    o["ref"] = o.get("ref") or ""
+    o["cents"], o["currency"] = int(o.get("cents") or 0), o.get("currency") or "USD"
+    o["decided"] = o.get("decided") or 0
+    return o
+
+
+def order_get(oid):
+    return _order(B.order_get(oid))
+
+
+def order_set(oid, **fields):
+    if not fields or not set(fields) <= _ORDER_FIELDS:
+        raise ValueError("bad fields")
+    B.order_update(oid, fields)
+
+
+def order_list(uid, limit=10):
+    return [_order(o) for o in B.order_list(uid, limit)]
+
+
+def orders_pending(limit=20):
+    """Orders waiting for payment or for an admin's decision."""
+    return [_order(o) for o in B.orders_pending(limit)]
+
+
+def order_stats():
+    """({status: count}, (approved orders, approved cents)) for the admin panel."""
+    return B.order_counts(), B.order_revenue()
+
+
+def sub_get(uid):
+    """The user's subscription row, or None. Expiry is checked by subscriptions.effective()."""
+    r = B.sub_get(uid)
+    return dict(plan=r["plan"], expires=int(r.get("expires") or 0), updated=int(r.get("updated") or 0)) if r else None
+
+
+def sub_set(uid, plan, expires):
+    B.sub_set(dict(uid=uid, plan=plan, expires=int(expires), updated=int(time.time())))
+
+
+def alloc_add(uid, plan, host, port, user, secret, cpu, ram, disk, expires):
+    now = int(time.time())
+    return B.alloc_add(dict(uid=uid, plan=plan, host=host, port=int(port), user=user, secret=_enc(secret),
+                            cpu=int(cpu), ram=int(ram), disk=int(disk), status="active", created=now,
+                            expires=int(expires)))
+
+
+def _alloc(a):
+    if not a:
+        return None
+    a = dict(a)
+    a["secret"] = fernet.decrypt(_unplain(a["secret"]).encode()).decode()
+    a["cpu"], a["ram"], a["disk"] = int(a.get("cpu") or 1), int(a.get("ram") or 1024), int(a.get("disk") or 10)
+    a["expires"], a["created"] = int(a.get("expires") or 0), int(a.get("created") or 0)
+    return a
+
+
+def alloc_get(aid):
+    return _alloc(B.alloc_get(aid))
+
+
+def alloc_list(uid):
+    return [_alloc(a) for a in B.alloc_list(uid)]
+
+
+def alloc_set(aid, **fields):
+    if not fields or not set(fields) <= _ALLOC_FIELDS:
+        raise ValueError("bad fields")
+    if "secret" in fields:
+        fields["secret"] = _enc(fields["secret"])
+    B.alloc_update(aid, fields)
+
+
+def alloc_active_count(uid):
+    return B.alloc_active_count(uid)
+
+
+def alloc_counts():
+    """(total instances, active ones) - no credentials loaded."""
+    return B.alloc_counts()
+
+
+def allocs_expiring(before):
+    """Active allocations past their expiry: hosting.sweep() deprovisions them."""
+    return [_alloc(a) for a in B.allocs_expiring(int(before))]
+
+
 # ---- binary blobs (the Pyrogram session snapshot), encrypted at rest
 def save_blob(key, data):
     B.kv_set(key, _enc_bytes(data))

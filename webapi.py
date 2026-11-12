@@ -43,6 +43,8 @@ import time
 from urllib.parse import unquote, urlparse
 
 import store
+import subscriptions
+import hosting
 from perf import describe as describe_perf
 from remote import Counting, Remote, fingerprint, load_pkey
 from util import clean_name, clean_path, env_int, human
@@ -271,6 +273,11 @@ async def h_add(user, data):
     name = clean_name(name or t["host"]) or t["host"]
     if not bot.NAME_RE.fullmatch(name):
         raise ApiError("name: letters, digits, . _ - (max 24)")
+    if not store.get_server(user["id"], name):  # replacing an existing server never needs a new slot
+        reached, p = subscriptions.server_limit_reached(user["id"])
+        if reached:
+            raise ApiError(f"the {p.name} plan holds {p.max_servers} servers max - delete one first, or pick a bigger plan "
+                           "in the Hosting tab", 402)
     key = (data.get("key") or "").strip()
     if t["scheme"] == "ssh" and t["secret"] is None:
         if key:
@@ -636,8 +643,69 @@ async def h_audit(user, data):
     return {"rows": [{"ts": r["ts"], "server": r["server"], "action": r["action"]} for r in rows]}
 
 
-# ---------------------------------------------------------------- admin routes (ADMINS / DEV_ID only)
+# ---------------------------------------------------------------- plans & VPS hosting
+def _order_json(o):
+    p = subscriptions.plan(o["plan"])
+    return {"id": o["id"], "uid": o["uid"], "plan": o["plan"], "name": p.name if p else o["plan"],
+            "price": o["cents"] / 100, "currency": o["currency"], "status": o["status"],
+            "ref": o["ref"], "created": o["created"]}
+
+
+async def h_plans(user, data):
+    """The Hosting tab: plan catalog, the user's current plan and orders."""
+    uid = user["id"]
+    cur = subscriptions.effective(uid)
+    row = store.sub_get(uid)
+    days = max(0, (row["expires"] - int(time.time())) // 86400) if row and row["expires"] > time.time() else 0
+    return {
+        "plans": [subscriptions.plan_json(p, current=p.key == cur.key) for p in subscriptions.plans()],
+        "current": subscriptions.plan_json(cur, current=True), "days_left": days,
+        "servers": len(store.list_servers(uid)), "slots_used": store.alloc_active_count(uid),
+        "orders": [_order_json(o) for o in store.order_list(uid, 10)],
+        "host_node": hosting.configured(),
+    }
+
+
+async def h_plan_order(user, data):
+    """Open an order for a plan (the Buy button)."""
+    p = subscriptions.plan((data.get("plan") or "").strip())
+    if not p or p.free:
+        raise ApiError("pick a paid plan")
+    o, _fresh = subscriptions.order_create(user["id"], p)
+    return {"order": _order_json(o), "payment_info": subscriptions.payment_info(p)}
+
+
+async def h_plan_paid(user, data):
+    """The buyer confirms the payment with a reference; the admins get the decision buttons."""
+    import bot
+    o, error = subscriptions.order_submit_ref(user["id"], (data.get("ref") or "").strip())
+    if error or not o:
+        raise ApiError(error or "no pending order")
+    p = subscriptions.plan(o["plan"])
+    known = store.user(user["id"]) or {}
+    who = ("@" + known["username"]) if known.get("username") else (known.get("name") or str(user["id"]))
+    kb = bot.InlineKeyboardMarkup([[bot.Btn("✅ Approve", callback_data=f"ord:{o['id']}:a"),
+                                    bot.Btn("❌ Decline", callback_data=f"ord:{o['id']}:r")]])
+    await bot.notify_admins(f"🧾 Order #{o['id']} needs a decision\n"
+                            f"👤 {who} ({user['id']})\n💠 {p.name} · {p.price:g} {subscriptions.CURRENCY} / {p.days}d\n"
+                            f"🧾 ref: {o['ref']} (from the Mini App)", kb)
+    return {"order": _order_json(store.order_get(o["id"]))}
+
+
+async def h_vps(user, data):
+    """The buyer's VPS instances - credentials included, shown to the owner only."""
+    uid = user["id"]
+    return {
+        "vps": [{"id": a["id"], "user": a["user"], "host": a["host"], "port": a["port"],
+                 "password": a["secret"], "cpu": a["cpu"], "ram": a["ram"], "disk": a["disk"],
+                 "status": a["status"], "expires": a["expires"], "plan": a["plan"]}
+                for a in store.alloc_list(uid)],
+        "slots": subscriptions.effective(uid).vps_slots,
+    }
+
+
 def need_admin(user):
+    """Admin routes (ADMINS / DEV_ID only)."""
     if user["id"] not in ADMINS:
         raise ApiError("admins only (set ADMINS or DEV_ID to your Telegram id)", 403)
 
@@ -661,6 +729,7 @@ async def h_admin_overview(user, data):
                 "force_sub": bot.FORCE_SUB_LABEL or "off", "webapp_url": WEBAPP_URL or "off",
                 "perf": describe_perf()},
         "top": [{"uid": u, "uploads": n, "bytes": b} for u, n, b in store.top_users(10)],
+        "subs": subscriptions.stats(),
     }
 
 
@@ -719,14 +788,35 @@ async def h_admin_broadcast(user, data):
     return {"queued": len(ids), "note": "sending now; the report arrives in your chat"}
 
 
+async def h_admin_orders(user, data):
+    need_admin(user)
+    return {"orders": [_order_json(o) for o in store.orders_pending(20)]}
+
+
+async def h_admin_order(user, data):
+    """Approve or decline an order from the Mini App - the same code path as the chat buttons."""
+    need_admin(user)
+    import bot
+    oid = int_arg(data, "id")
+    action = (data.get("action") or "").strip().lower()
+    if not oid or action not in ("approve", "reject"):
+        raise ApiError("id and action (approve|reject) are required")
+    o, error = await bot.approve_order(oid, user["id"], action == "approve")
+    if error:
+        raise ApiError(error, 404 if "no such order" in error else 400)
+    return {"order": _order_json(o), "action": action}
+
+
 ROUTES = {
     "me": h_me, "servers/add": h_add, "servers/use": h_use, "servers/del": h_del, "servers/set": h_set,
     "ls": h_ls, "cd": h_cd, "mkdir": h_mkdir, "rm": h_rm, "mv": h_mv,
     "term": h_term, "stats": h_stats, "view": h_view, "send": h_send, "fetch": h_fetch,
     "up/init": h_up_init, "up/chunk": h_up_chunk, "up/status": h_up_status, "up/finish": h_up_finish,
     "jobs": h_jobs, "jobs/action": h_jobs_action, "audit": h_audit,
+    "plans": h_plans, "plans/order": h_plan_order, "plans/paid": h_plan_paid, "vps": h_vps,
     "admin/overview": h_admin_overview, "admin/users": h_admin_users, "admin/user": h_admin_user,
     "admin/ban": h_admin_ban, "admin/broadcast": h_admin_broadcast,
+    "admin/orders": h_admin_orders, "admin/order": h_admin_order,
 }
 
 

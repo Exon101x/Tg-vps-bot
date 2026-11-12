@@ -46,11 +46,20 @@ sources.py        Streaming sources: parallel windowed downloads from Telegram (
 remote.py         Protocol clients: FTP/FTPS (ftplib), SSH + SFTP (paramiko). Host-key pinning,
                   sudo prefixing, path sanitising, the exists()/SIZE fallback, resume support.
 
-store.py          Domain API over the data (servers, jobs, audit, usage, blobs) + Fernet encryption
-                  of credentials before anything is written.
+store.py          Domain API over the data (servers, jobs, audit, usage, orders, subscriptions,
+                  VPS allocations, blobs) + Fernet encryption of credentials before anything
+                  is written.
 
 backends.py       Four backends behind one interface: SQLite, PostgreSQL/MySQL (SQLAlchemy),
                   MongoDB (pymongo). Document-oriented rows, so all four behave identically.
+
+subscriptions.py  The plan catalog (defaults or SUBSCRIPTION_PLANS JSON), the order lifecycle
+                  (pending -> awaiting -> approved/rejected), plan limits (which plans may
+                  hold how many servers / VPSes) and the admin revenue stats.
+
+hosting.py        VPS provisioning on the owner's host node over SSH: alnum-only generated
+                  credentials, admin-defined command templates, renewal extensions, and the
+                  expiry sweep the monitor loop runs.
 
 session_sync.py   Telegram session snapshots (encrypted into the kv table) and the single-instance
                   lock with heartbeats - the two mechanisms behind zero-downtime deploys.
@@ -68,7 +77,8 @@ migrate.py        One-shot data copy between two DATABASE_URLs.
 healthcheck.py    What the Docker HEALTHCHECK runs: hits the health endpoint.
 ```
 
-Dependency direction: `bot.py` → `jobs.py` → `sources.py` + `remote.py` → `store.py` → `backends.py`.
+Dependency direction: `bot.py` → `jobs.py` → `sources.py` + `remote.py` → `store.py` → `backends.py`;
+`subscriptions.py` and `hosting.py` sit on `store.py` (hosting also uses `remote.py` for the node).
 `deploy.py` and `migrate.py` are standalone tools; `perf.py`, `largefiles.py`, `util.py` are leaf libraries.
 `webapi.py` shares `bot.py`'s helpers through late imports (it runs inside the same process) and uses the
 same `store`/`remote`/`jobs` layers, so a web action and the equivalent chat action behave identically.

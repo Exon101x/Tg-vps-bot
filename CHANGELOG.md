@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.7.0 — Subscriptions: sell plans, VPSes and bot hosting
+
+* **A full subscription system** (`subscriptions.py`): a plan catalog every owner can sell —
+  Free (3 servers) · PRO · VPS Starter · VPS Pro by default, replaced entirely with
+  `SUBSCRIPTION_PLANS` (JSON: keys, prices, periods, server caps, VPS specs). Bad JSON never
+  takes the bot down; the Free plan is always there as the fallback.
+* **Buying flow**: `/plans` shows the catalog with Buy buttons → the buyer pays however the
+  owner accepts (`PAYMENT_INFO` carries the links, `{amount}`/`{currency}`/`{plan}`/`{days}`
+  placeholders) → `/paid <reference>` attaches it to the open order → the admins get
+  Approve/Decline buttons. One tap activates the plan instantly; renewals extend from the
+  current expiry. Telegram Stars needs a newer Bot-API layer than the MTProto stack, so
+  payments use this classic assisted flow — with a full audit trail.
+* **VPS plans include real instances** (`hosting.py`): approved orders provision SSH users
+  with disk quotas on the owner's host node (`VPS_NODE_HOST` and friends) and deliver the
+  credentials to the buyer automatically. Usernames and passwords are alnum-only (no shell
+  injection possible), Fernet-encrypted at rest, and shown only to their owner (`/myvps`).
+  Override `VPS_PROVISION_CMD` / `VPS_DEPROVISION_CMD` for LXC, Docker or Proxmox. Expired
+  subscriptions are swept by the monitor loop: instance removed, buyer notified, plan lapsed
+  back to Free.
+* **Host your own bots**: `/hosting` is the 60-second guide — buy a VPS, `/add` it back as a
+  server, stream the bot's files from Telegram, run it with `/sh`, watch it with `/stats`.
+  `/mysub` tracks limits and days left; plan server caps are enforced in `/add` and the app.
+* **Mini App gets a Hosting tab**: plan cards with gradient prices and Buy buttons, the
+  checkout box (paste the payment reference), order history with live status chips, and My
+  VPS cards with credentials behind a show/hide toggle. The Admin tab gains subs/revenue/VPS
+  cards and an order list with one-tap approve/decline — the same code path as the chat
+  buttons.
+* **Admin panel**: `/admin` now shows active subs per plan, revenue, open orders, VPS counts
+  and the host-node status; `/admin orders` lists everything needing a decision.
+* **Storage** (`backends.py`, `store.py`): three new tables — `orders`, `subs`, `allocs` — on
+  every backend (SQLite, PostgreSQL, MySQL/MariaDB, MongoDB), covered by the contract test
+  and carried along by `migrate.py`. Prices are stored in whole cents; VPS passwords only
+  ever exist as Fernet ciphertext in a database.
+
 ## 1.6.1 — Mini App redesign: modern glass UI
 
 * **A fresh, modern look for the whole Mini App** — the flat white 2023-style UI is gone. The app

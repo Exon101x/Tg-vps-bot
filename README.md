@@ -36,16 +36,17 @@ Heroku or any VPS with Python 3.10+.
 3. [Commands at a glance](#commands-at-a-glance)
 4. [The Mini App](#the-mini-app)
 5. [Big files: 2 GB, 4 GB and beyond](#big-files-2-gb-4-gb-and-beyond)
-6. [Configuration](#configuration)
-7. [Databases](#databases)
-8. [Speed profiles](#speed-profiles)
-9. [Deployment](#deployment)
-10. [Security](#security)
-11. [Development and CI](#development-and-ci)
-12. [Repository layout](#repository-layout)
-13. [FAQ](#faq)
-14. [Limits and testing status](#limits-and-testing-status)
-15. [License](#license)
+6. [Subscriptions & VPS hosting](#subscriptions--vps-hosting)
+7. [Configuration](#configuration)
+8. [Databases](#databases)
+9. [Speed profiles](#speed-profiles)
+10. [Deployment](#deployment)
+11. [Security](#security)
+12. [Development and CI](#development-and-ci)
+13. [Repository layout](#repository-layout)
+14. [FAQ](#faq)
+15. [Limits and testing status](#limits-and-testing-status)
+16. [License](#license)
 
 ## Features at a glance
 
@@ -57,7 +58,10 @@ Heroku or any VPS with Python 3.10+.
 | **Files beyond 4 GB** | `/multi` + `/done` joins split volumes **on the fly** into one file on any server |
 | **Per-file server picker** | `/ask on` — forward or upload a file, tap the destination server, done |
 | **Mini App** | `/app` — a web UI inside Telegram: file manager, uploads from your phone, SSH console, VPS stats; sign-in is your Telegram id, no password |
-| **Admin panel** | `/admin` and the app's **Admin** tab — users and usage, top movers, ban / unban, broadcast to everyone (`ADMINS` / `DEV_ID`) |
+| **Admin panel** | `/admin` and the app's **Admin** tab — users and usage, orders and revenue, ban / unban, broadcast to everyone (`ADMINS` / `DEV_ID`) |
+| **Subscriptions** | `/plans` — a sellable catalog (Free / PRO / VPS tiers, your prices via `SUBSCRIPTION_PLANS`): buyers pay however you accept, you approve, plans activate instantly |
+| **Buy-a-VPS** | VPS plans include real SSH instances with disk quotas, provisioned on your host node — credentials delivered automatically, renewed by re-paying, removed on expiry |
+| **Host your own bots** | buyers add their VPS back as a server and get the full toolbox: upload files from Telegram, `/sh` to set up, `/service` to keep it running — `/hosting` is the 60-second guide |
 | **Force-subscribe** | set `FORCE_SUB` and users must join your channel first — join card with a recheck button in chat, a join screen in the app; admins are exempt |
 | **Hardened API** | per-user rate limiting, admin-controlled ban switch, strict CSP, `initData` HMAC sign-in — nothing stored client-side |
 | **URL downloads** | `/fetch <url>` pulls HTTP(S) straight to the server — resumable, SSRF-guarded |
@@ -116,6 +120,7 @@ Full syntax, arguments and examples: **[docs/COMMANDS.md](docs/COMMANDS.md)**.
 | Group | Commands |
 |---|---|
 | Servers | `/add` `/servers` `/use` `/del` `/status` `/monitor` `/audit` `/about` |
+| Plans & VPS | `/plans` `/mysub` `/myvps` `/paid` `/hosting` |
 | VPS admin (SSH) | `/vps` `/stats` `/ps` `/ports` `/logins` `/updates` `/disk` `/firewall` `/failed` `/service` `/logs` `/docker` `/upgrade` `/reboot` |
 | Shell | `/sh <cmd>` · `/term` (terminal mode) · `/app` (the Mini App) |
 | Files | send any file (streamed, up to 4 GB direct with Premium) · `/fetch` `/get` `/join` `/multi`+`/done` |
@@ -137,7 +142,8 @@ applies the same `ALLOWED_USERS` gate as the chat. No passwords, no cookies, not
 | **Console** | run shell commands on the active SSH server — remembered working directory, the same dangerous-command confirmation as `/sh` |
 | **Stats** | the `/stats` overview plus every `/vps` view: processes, ports, docker, disk, firewall, failed services, logins, updates |
 | **Queue** | the upload queue with retry/stop, and the audit trail |
-| **Admin** | *(ADMINS / DEV_ID only)* live overview cards — users, servers, uploads and bytes (total / today / 7 days), staging, uptime, database — plus the user list with per-user detail sheets, ban / unban and a broadcast box |
+| **Hosting** | the plans catalog with Buy buttons, the checkout box (`/paid` reference), your orders — and your VPS instances with credentials (tap to reveal), specs and expiry |
+| **Admin** | *(ADMINS / DEV_ID only)* live overview cards — users, servers, uploads and bytes (total / today / 7 days), subs, revenue, VPSes, uptime, database — the user list with detail sheets and ban / unban, **order approvals** (approve / decline right in the list) and a broadcast box |
 
 With `FORCE_SUB` set, users who have not joined the channel get a dedicated **join screen** (join button + recheck)
 instead of the app, until they subscribe. The header carries the bot logo (`webapp/logo.png`), and the footer keeps
@@ -167,6 +173,26 @@ can carry one file in Telegram, hence the volume workflows.
 > offsets) but has not yet been exercised against a live Premium upload in production — try one big
 > file first.
 
+## Subscriptions & VPS hosting
+
+Sell plans — including VPS instances your users can host their own bots on. Everything is driven by
+environment variables ([docs/CONFIG.md](docs/CONFIG.md#subscriptions--vps-hosting)):
+
+| Piece | How it works |
+|---|---|
+| **Catalog** | Free (3 servers) · PRO · VPS Starter (1× VPS: 1 vCPU / 1 GB / 15 GB) · VPS Pro (2× VPS: 2 vCPU / 2 GB / 40 GB each) — replace entirely with `SUBSCRIPTION_PLANS` (JSON). `SUBSCRIPTION_CURRENCY` sets the display currency |
+| **Checkout** | `/plans` → **Buy** → the buyer pays however you accept (`PAYMENT_INFO` carries your UPI/PayPal/crypto links) → `/paid <reference>` → you get Approve/Decline buttons |
+| **Approval** | one tap (or the app's **Admin** tab) activates the plan instantly, extends renewals from the current expiry, and provisions the plan's VPS instances on your host node — credentials land in the buyer's chat and in **Hosting → My VPS** |
+| **The VPSes** | locked-down Linux users with disk quotas on the machine you set with `VPS_NODE_HOST` (override `VPS_PROVISION_CMD`/`VPS_DEPROVISION_CMD` for LXC, Docker or Proxmox). Passwords are Fernet-encrypted at rest, alnum-only (no shell injection), and instances are removed automatically when the subscription lapses |
+| **Limits** | plans cap saved servers (`/add` and the app enforce it); without a subscription everyone is Free — nothing to configure for the core bot |
+| **For buyers** | `/hosting` is the 60-second guide: add the VPS back with `/add myvps ssh://user@host`, send the bot's files straight from Telegram, run it with `/sh`, keep it alive with `/service` — a full hosting workflow without leaving the chat |
+| **Admin view** | `/admin` shows active subs, revenue, open orders and VPS counts; `/admin orders` lists what needs a decision |
+
+> [!NOTE]
+> Telegram Stars invoicing needs a Bot-API layer newer than this bot's MTProto stack, so payments
+> follow the classic assisted flow (pay via your links, reference in `/paid`, you approve). The
+> full audit trail — orders, decisions, provisioning — is in the database and `/audit`.
+
 ## Configuration
 
 Everything is an environment variable; a `.env` file works too (real variables win). The complete
@@ -189,6 +215,7 @@ is the template.
 | Core | `DATABASE_URL` (default `sqlite:///bot.db`) · `PERFORMANCE` (`auto` by default) · `LOG_LEVEL` |
 | HTTP port / Mini App | `PORT` · `HEALTH_PORT` · `HEALTH_BIND` · `WEBAPP_URL` (public HTTPS address that enables the `/app` button) · `WEB_MAX_MB` (app upload cap, default 4096) · `WEB_RATE` (app API requests per minute per user, default 90) |
 | Admin & community | `ADMINS` · `DEV_ID` (developer id: admin + force-sub exempt) · `DEV_CHANNEL` (developer credit) · `FORCE_SUB` (channel users must join) |
+| Subscriptions & VPS hosting | `SUBSCRIPTION_PLANS` (JSON catalog) · `SUBSCRIPTION_CURRENCY` · `PAYMENT_INFO` · `VPS_NODE_HOST` `VPS_NODE_PORT` `VPS_NODE_USER` `VPS_NODE_PASS`/`VPS_NODE_KEY` (the host node) · `VPS_PUBLIC_HOST` · `VPS_SSH_PORT` · `VPS_PROVISION_CMD` · `VPS_DEPROVISION_CMD` |
 | Transfer tuning | `TG_PARALLEL` · `TG_WINDOW_MB` · `SFTP_WINDOW_MB` · `FTP_BLOCK_KB` · `PARALLEL_PER_SERVER` |
 | Size limits | `TG_MAX_MB` · `MAX_FETCH_MB` · `MAX_RETRIES` |
 | Monitoring | `MONITOR_INTERVAL` · `DISK_ALERT` · `MEM_ALERT` |

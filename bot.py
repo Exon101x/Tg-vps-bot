@@ -38,6 +38,8 @@ from pyrogram.types import BotCommand, InlineKeyboardButton as Btn, InlineKeyboa
 
 import session_sync
 import store
+import subscriptions
+import hosting
 import webapi
 from jobs import Engine, is_permanent
 from largefiles import choose_volume, join_script, order_volumes, plan_volumes, volume_name
@@ -165,6 +167,15 @@ VPS stats from a web UI inside Telegram (needs WEBAPP_URL, the bot's public HTTP
 Files over 4 GB (or over 2 GB without Premium): split them first (7-Zip volumes, or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`),
 then /multi, send all the .001 .002 ... parts, and /done: one file lands on any FTP/FTPS/SFTP server.
 
+PLANS & VPS HOSTING (buy your own VPS - host your own bots on it)
+/plans - the plans: more servers, or a VPS of your own to host bots 24/7
+/mysub - your plan, limits and expiry · /myvps - your VPS instances
+/paid <reference> - confirm a payment (the UPI/PayPal/crypto reference)
+/hosting - the 60-second guide: your bot, running on your VPS, tonight
+VPS plans include SSH instances with a disk quota - buy, get credentials in
+seconds, add the VPS back as a server (/add myvps ssh://user@host) and manage
+it right from this chat (files, shell, services, the Mini App console).
+
 MINI APP (/app)
 A web UI served by the bot itself on its health port. Sign-in is automatic: Telegram signs
 the request and the bot checks the signature, so there is no extra password. Browse files, upload
@@ -173,7 +184,8 @@ and the buttons appear once WEBAPP_URL points at the bot's public HTTPS address 
 provide one automatically; on a plain VPS put nginx or Caddy in front for HTTPS).
 
 ADMIN (ADMINS / DEV_ID only)
-/admin - panel: overview, users and usage, ban / unban, broadcast to everyone
+/admin - panel: overview, users and usage, orders and revenue, ban / unban, broadcast
+/admin orders - approve or decline payments (the Mini App has the same)
 The Mini App has the same panel as a tab (/app), with live cards per user.
 
 SOURCE
@@ -647,6 +659,13 @@ async def add(_, m):
     if not NAME_RE.fullmatch(name):
         return await m.reply("Name: letters, digits, . _ - (max 24).")
     uid = m.from_user.id
+    if not store.get_server(uid, name):  # replacing an existing server never needs a new slot
+        reached, p = subscriptions.server_limit_reached(uid)
+        if reached:
+            return await m.reply(
+                f"🧱 The {p.name} plan holds {p.max_servers} server{'s' if p.max_servers != 1 else ''} max - you are at the limit.\n"
+                "Free a slot with /del - or /plans for a bigger one.",
+                reply_markup=InlineKeyboardMarkup([[Btn("💎 Plans", callback_data="pl:plans")]]))
     try:
         await m.delete()  # don't leave a password in the chat
     except Exception:
@@ -747,6 +766,205 @@ async def about(_, m):
     await m.reply("\n".join(lines))
 
 
+# ---------------------------------------------------------------- plans, buying, VPS hosting
+CURRENCY = subscriptions.CURRENCY
+
+
+def plan_card(p, current=False):
+    """One plan as a compact card: badge, price, what's in it."""
+    price = "free" if p.free else f"{p.price:g} {CURRENCY} / {p.days}d"
+    head = f"{'🆓' if p.free else '💠'} {p.name}" + (f" · {p.tag}" if p.tag else "") + ("  ✅ yours" if current else "")
+    lim = "∞ servers" if p.max_servers < 0 else f"{p.max_servers} servers"
+    if p.vps_slots:
+        lim += f" · {p.vps_slots}x VPS ({p.vps_cpu} vCPU · {p.vps_ram} MB · {p.vps_disk} GB)"
+    lines = [head, f"   {price}", f"   {lim}"]
+    if p.desc:
+        lines.append(f"   {p.desc}")
+    return "\n".join(lines)
+
+
+def plans_kb():
+    rows = [[Btn(f"💠 {p.name} · {p.price:g} {CURRENCY}", callback_data=f"buy:{p.key}")]
+            for p in subscriptions.plans(paid_only=True)]
+    rows.append([Btn("💎 My plan", callback_data="pl:sub"), Btn("🚀 Host a bot", callback_data="pl:host")])
+    return InlineKeyboardMarkup(rows)
+
+
+def plans_text(uid):
+    cur = subscriptions.effective(uid)
+    lines = ["💎 Plans", ""]
+    lines += [plan_card(p, current=p.key == cur.key) for p in subscriptions.plans()]
+    lines += ["", "Free is automatic - no card, no sub. Paid tiers add more servers and VPSes of your own:",
+              "a real Linux box with SSH and a disk quota, to host your bots on, 24/7.",
+              "Tap a button to buy - approval by the owner usually takes minutes. /hosting for the guide."]
+    return "\n".join(lines)
+
+
+def order_text(o, p):
+    return (f"🧾 Order #{o['id']} · {p.name}\n"
+            f"   {p.price:g} {CURRENCY} / {p.days} days\n\n"
+            f"💳 How to pay:\n{subscriptions.payment_info(p)}\n\n"
+            f"When it is paid, send:\n/paid <transaction reference>\n"
+            f"(order #{o['id']} is open - it is what the reference attaches to)")
+
+
+def mysub_text(uid):
+    p, days = subscriptions.sub_row(uid)
+    n = len(store.list_servers(uid))
+    slots = store.alloc_active_count(uid)
+    cap = "∞" if p.max_servers < 0 else str(p.max_servers)
+    lines = [f"💎 Your plan: {p.name}"]
+    if p.free:
+        lines += ["Free - no expiry. Upgrade any time: /plans"]
+    else:
+        lines += [f"✅ active · {days} day{'s' if days != 1 else ''} left "
+                  f"(until {time.strftime('%Y-%m-%d', time.gmtime(store.sub_get(uid)['expires']))})",
+                  "Renewing extends from where you are, and keeps your VPS alive - /plans"]
+    lines += [f"🖥 servers: {n} / {cap}"]
+    if p.vps_slots or slots:
+        lines.append(f"🚀 VPS: {slots} active" + (f" / {p.vps_slots} included" if p.vps_slots else ""))
+    return "\n".join(lines)
+
+
+def vps_card(a):
+    days = max(0, (a["expires"] - int(time.time())) // 86400)
+    state = "🟢 active" if a["status"] == "active" and a["expires"] > time.time() else f"🔴 {a['status']}"
+    lines = [f"🚀 {a['user']}@{a['host']}  ·  {state}",
+             f"   SSH port {a['port']} · {a['cpu']} vCPU · {a['ram']} MB · {a['disk']} GB"
+             + (f" · {days}d left" if a["status"] == "active" else ""),
+             f"   user: {a['user']} · password: {a['secret']}",
+             f"   included with the {subscriptions.plan(a['plan']).name if subscriptions.plan(a['plan']) else a['plan']} plan"]
+    if a["status"] == "active":
+        lines.append("   host a bot on it: /hosting - files go straight from this chat")
+    return "\n".join(lines)
+
+
+def myvps_text(uid):
+    rows = store.alloc_list(uid)
+    if not rows:
+        return ("🚀 No VPS yet.\n\nPlans with an included VPS (real SSH instances with a disk quota): /plans\n"
+                "Buy, get credentials in seconds, host your own bots on it 24/7.")
+    return "🚀 Your VPS instances\n\n" + "\n\n".join(vps_card(a) for a in rows) + "\n\nRenew before expiry to keep them: /plans"
+
+
+HOSTING_GUIDE = """🚀 Host your own bot on a VPS from this bot - the 60-second guide
+
+1️⃣ /plans - pick a plan with an included VPS, tap Buy, pay, send /paid <reference>
+2️⃣ Approved = credentials land here instantly (also /myvps anytime)
+3️⃣ Make the VPS a server here: /add myvps ssh://USER@HOST
+   (it becomes an SSH server - you never leave Telegram)
+4️⃣ Send your bot's files to this chat - they stream straight onto the VPS
+   (needs a folder? caption it "> mybot/" - or /cd, /mkdir first)
+5️⃣ Set it up and run it:
+   /sh python3 -m venv ~/venv
+   /sh ~/venv/bin/pip install -r ~/mybot/requirements.txt
+   /sh cd ~/mybot && nohup ~/venv/bin/python3 bot.py &
+   (for auto-start on reboot: a systemd unit via /service, or ask in the channel)
+6️⃣ Watch it: /stats · /ps · /logs - all from this chat
+
+That is it - your bot, on your VPS, managed from Telegram.
+No VPS yet? /plans - the VPS Starter plan has one included."""
+
+
+async def notify_admins(text, kb=None):
+    for a in ADMINS:
+        try:
+            await app.send_message(a, text, reply_markup=kb)
+        except Exception:
+            pass
+
+
+async def approve_order(oid, admin_uid, approve):
+    """Decide an order: on approve, activate the plan, extend/provision its VPS instances and
+    deliver everything to the buyer. Returns (order, error_text)."""
+    o, p, error = subscriptions.order_decide(oid, approve, admin_uid)
+    if error or not o:
+        return o, error
+    if not approve:
+        try:
+            await app.send_message(o["uid"], f"❌ Order #{oid} ({p.name}) was declined.\n"
+                                             f"Questions? The channel bio has the owner's contacts - or /plans for another plan.")
+        except Exception:
+            pass
+        return o, None
+    expires = subscriptions.activate(o["uid"], p)
+    until = time.strftime("%Y-%m-%d", time.gmtime(expires))
+    notes, creds = [], []
+    if p.vps_slots > 0:
+        for a in store.alloc_list(o["uid"]):  # keep the instances the buyer already has
+            if a["status"] == "active":
+                store.alloc_set(a["id"], expires=expires)
+        left, _ = subscriptions.vps_slots_left(o["uid"])
+        for _ in range(max(0, left)):
+            try:
+                creds.append(await asyncio.to_thread(hosting.provision, o["uid"], p, expires))
+            except Exception as e:
+                notes.append(f"⚠️ VPS provisioning failed: {err(e)}")
+                break
+    text = [f"✅ {p.name} is active - until {until} ({p.days} days).", "💳 /mysub · /myvps · servers: "
+             + ("∞" if p.max_servers < 0 else str(p.max_servers))]
+    for a in creds:
+        text += ["", "🚀 Your VPS is ready",
+                 f"Host: {a['host']} · SSH port {a['port']}",
+                 f"User: {a['user']}", f"Password: {a['secret']}",
+                 f"Spec: {a['cpu']} vCPU · {a['ram']} MB · {a['disk']} GB · until {until}",
+                 "Host your own bot on it: /hosting (files go straight from this chat)."]
+    text += notes + ["", "Renew before it ends to keep everything: /plans (it extends from where you are)."]
+    try:
+        await app.send_message(o["uid"], "\n".join(text))
+    except Exception:
+        pass
+    return o, None
+
+
+@app.on_message(auth & filters.command(["plans", "pricing"]))
+async def plans_cmd(_, m):
+    await m.reply(plans_text(m.from_user.id), reply_markup=plans_kb())
+
+
+@app.on_message(auth & filters.command(["mysub", "mysubscription"]))
+async def mysub_cmd(_, m):
+    kb = InlineKeyboardMarkup([[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]])
+    await m.reply(mysub_text(m.from_user.id), reply_markup=kb)
+
+
+@app.on_message(auth & filters.command("myvps"))
+async def myvps_cmd(_, m):
+    kb = InlineKeyboardMarkup([[Btn("💎 Plans", callback_data="pl:plans")]]) \
+        if not store.alloc_list(m.from_user.id) else None
+    await m.reply(myvps_text(m.from_user.id), reply_markup=kb)
+
+
+@app.on_message(auth & filters.command("paid"))
+async def paid_cmd(_, m):
+    uid = m.from_user.id
+    o, error = subscriptions.order_submit_ref(uid, arg_text(m))
+    if error or not o:
+        kb = InlineKeyboardMarkup([[Btn("💎 Plans", callback_data="pl:plans")]])
+        return await m.reply(f"❌ {error}", reply_markup=kb)
+    p = subscriptions.plan(o["plan"])
+    try:
+        await m.delete()  # the reference may carry payment details: do not leave it in the chat
+    except Exception:
+        pass
+    await m.reply(f"🧾 Order #{o['id']} · {p.name} - reference received, waiting for the owner's approval.\n"
+                  f"The moment it is approved, your plan (and VPS, if the plan has one) activates automatically.")
+    known = store.user(uid) or {}
+    who = ("@" + known["username"]) if known.get("username") else (known.get("name") or str(uid))
+    kb = InlineKeyboardMarkup([[Btn("✅ Approve", callback_data=f"ord:{o['id']}:a"),
+                                Btn("❌ Decline", callback_data=f"ord:{o['id']}:r")]])
+    await notify_admins(f"🧾 Order #{o['id']} needs a decision\n"
+                        f"👤 {who} ({uid})\n💠 {p.name} · {p.price:g} {CURRENCY} / {p.days}d\n"
+                        f"🧾 ref: {o['ref']}", kb)
+
+
+@app.on_message(auth & filters.command(["hosting", "host"]))
+async def hosting_cmd(_, m):
+    kb = InlineKeyboardMarkup([[Btn("💎 Plans", callback_data="pl:plans")],
+                               [Btn("🚀 My VPS", callback_data="pl:vps")]])
+    await m.reply(HOSTING_GUIDE, reply_markup=kb)
+
+
 # ---------------------------------------------------------------- admin panel (ADMINS / DEV_ID)
 async def broadcast(text, admin_uid):
     """Message every known user (from the admin panel). A report lands in the admin's chat."""
@@ -791,6 +1009,13 @@ def admin_overview_text():
         f"📂 app staging: {stage_files} file(s), {human(stage_bytes)}",
         f"🔒 force-sub: {FORCE_SUB_LABEL or 'off'} · 📱 Mini App: {WEBAPP_URL or 'off'}",
     ]
+    st = subscriptions.stats()
+    per_plan = ", ".join(f"{subscriptions.plan(k).name if subscriptions.plan(k) else k} {v}"
+                         for k, v in st["per_plan"].items() if v) or "none"
+    lines += [f"💳 subs: {st['subs_active']} active ({per_plan}) · revenue {st['revenue']} · "
+              f"orders: {st['orders'].get('awaiting', 0)} awaiting / {st['orders'].get('pending', 0)} pending",
+              f"🚀 VPS: {st['vps_active']} active / {st['vps_total']} total · host node: "
+              + ("configured" if hosting.configured() else "NOT configured (set VPS_NODE_HOST - VPS plans need it)")]
     top = store.top_users(5)
     if top:
         known = {r["uid"]: r for r in store.users(500)}
@@ -843,6 +1068,30 @@ def admin_user_text(uid):
     return "\n".join(lines)
 
 
+def admin_orders_text():
+    rows = store.orders_pending(15)
+    if not rows:
+        return "🧾 No open orders. They appear here (and in your chat) the moment a buyer sends /paid."
+    lines = ["🧾 Open orders (newest first)"]
+    for o in rows:
+        p = subscriptions.plan(o["plan"])
+        known = store.user(o["uid"]) or {}
+        who = ("@" + known["username"]) if known.get("username") else (known.get("name") or str(o["uid"]))
+        state = "🟡 awaiting approval" if o["status"] == "awaiting" else "⚪ waiting for payment"
+        lines.append(f"#{o['id']} 👤 {who} ({o['uid']}) · 💠 {p.name if p else o['plan']} · "
+                     f"{o['cents'] / 100:g} {o['currency']} · {state}"
+                     + (f"\n   ref: {o['ref']}" if o["ref"] else ""))
+    lines.append("\nTap the buttons to decide an awaiting order - /admin orders refreshes.")
+    return "\n".join(lines)
+
+
+def admin_orders_kb():
+    rows = [[Btn(f"✅ #{o['id']}", callback_data=f"ord:{o['id']}:a"),
+             Btn(f"❌ #{o['id']}", callback_data=f"ord:{o['id']}:r")]
+            for o in store.orders_pending(15) if o["status"] == "awaiting"]
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
 @app.on_message(auth & filters.command("admin"))
 async def admin_cmd(_, m):
     uid = m.from_user.id
@@ -853,12 +1102,15 @@ async def admin_cmd(_, m):
     head = head.lower()
     if not arg:
         kb = InlineKeyboardMarkup([[Btn("📊 Refresh", callback_data="adm:overview")],
-                                   [Btn("👥 Users", callback_data="adm:users")]])
+                                   [Btn("👥 Users", callback_data="adm:users")],
+                                   [Btn("🧾 Orders", callback_data="adm:orders")]])
         return await m.reply(admin_overview_text(), reply_markup=kb)
     if head == "overview":
         return await m.reply(admin_overview_text())
     if head == "users":
         return await m.reply(admin_users_text())
+    if head == "orders":
+        return await m.reply(admin_orders_text(), reply_markup=admin_orders_kb())
     if head == "user" and rest.strip().lstrip("-").isdigit():
         return await m.reply(admin_user_text(int(rest.strip())))
     if head in ("ban", "unban") and rest.strip().lstrip("-").isdigit():
@@ -875,7 +1127,7 @@ async def admin_cmd(_, m):
         n = len(store.user_ids())
         return await confirm(m, uid, f"📣 Send this to {n} user(s)?\n\n{text[:600]}",
                              lambda mm: broadcast_and_report(mm, uid, text))
-    await m.reply("Usage: /admin [overview | users | user <id> | ban <id> | unban <id> | broadcast <text>]")
+    await m.reply("Usage: /admin [overview | users | user <id> | orders | ban <id> | unban <id> | broadcast <text>]")
 
 
 async def broadcast_and_report(mm, uid, text):

@@ -126,8 +126,34 @@
     <div id="audit" class="term small"></div>
   </section>
 
+  <section id="v-hosting" class="view">
+    <div id="host-current" class="list"></div>
+    <h3 class="sub">Plans</h3>
+    <div id="plan-list" class="plans"></div>
+    <div id="pay-box" class="card form hidden">
+      <h3 id="pay-title">Order</h3>
+      <div id="pay-info" class="dim"></div>
+      <input id="pay-ref" placeholder="transaction reference / UTR" autocomplete="off" spellcheck="false">
+      <button id="pay-send" class="btn primary">I paid — confirm</button>
+    </div>
+    <h3 class="sub">My orders</h3>
+    <div id="order-list" class="list"></div>
+    <h3 class="sub">My VPS</h3>
+    <div id="vps-list" class="list"></div>
+    <div class="hintcard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+      <div>
+        VPS plans include a real SSH instance with a disk quota. Buy one, add it back as a server
+        (<code>ssh://user@host</code> in the Servers tab), send your bot's files from the Files tab and
+        run it from the Console — your bot, hosted from Telegram.
+      </div>
+    </div>
+  </section>
+
   <section id="v-admin" class="view">
     <div id="adm-cards" class="cards"></div>
+    <h3 class="sub">Orders</h3>
+    <div id="adm-orders" class="list"></div>
     <h3 class="sub">Users</h3>
     <div id="adm-users" class="list"></div>
     <div class="card form">
@@ -168,6 +194,10 @@
   <button class="tab" data-tab="queue" title="Queue">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 8.5 4.8v9.6L12 21.2l-8.5-4.8V6.8L12 2Z"/><path d="m3.5 6.8 8.5 4.8 8.5-4.8M12 21.2v-9.6"/></svg>
     Queue
+  </button>
+  <button class="tab" data-tab="hosting" title="Hosting">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+    Hosting
   </button>
   <button class="tab hidden" data-tab="admin" id="tab-admin" title="Admin">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/></svg>
