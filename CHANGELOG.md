@@ -88,8 +88,8 @@
 * **Ban switch**: one flag locks an account out of the chat and the app at once (30 s worst-case in
   the API cache, instant after the flip through the panel); admins cannot be banned through the
   panel; every ban/unban lands in the audit log.
-* **Logo & brand assets**: `assets/logo.png` (1024² robot mascot, also shipped as the lightweight
-  `webapp/logo.png` app icon + favicon) and `assets/banner.png` (wide hero). The Mini App header
+* **Logo & brand assets**: `assets/logo.jpg` (1024² robot mascot, also shipped as the lightweight
+  `webapp/logo.png` app icon + favicon) and `assets/banner.jpg` (wide hero). The Mini App header
   shows the logo.
 * **Fork-friendly credits**: the GitHub source link and the developer credit (`DEV_CHANNEL`,
   `DEV_ID`) are served to the Mini App and shown in the footer of every tab, in `/start` and

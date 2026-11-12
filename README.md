@@ -325,7 +325,7 @@ deploy.py         deployment setup wizard (stdlib only)
 migrate.py        copy data between databases
 healthcheck.py    Docker HEALTHCHECK helper
 Dockerfile, docker-compose.yml, render.yaml, heroku.yml, Procfile, deploy/vpsbot.service
-assets/           banner.svg (README), logo.png (bot avatar / app icon), banner.png (wide hero)
+assets/           banner.svg (README), logo.jpg (bot avatar / app icon), banner.jpg (wide hero)
 tests/            14 check scripts run by pytest: local FTP + SSH servers, in-memory
                   databases, 24 security + 22 big-file + 51 mini-app + 40 admin checks
 docs/             COMMANDS.md, CONFIG.md, DEPLOY.md, ARCHITECTURE.md
