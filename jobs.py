@@ -1,13 +1,15 @@
 """Persistent upload queue.
 
-Streams Telegram media / URLs straight to the server (no temp disk), retries transient failures with backoff
-and resumes from the partial file already on the server. Jobs live in SQLite, so a queue survives restarts:
-the source is just (chat_id, message_id) or a URL, and Telegram re-serves the bytes.
+Streams Telegram media / URLs / Mini App uploads straight to the server, retries transient failures
+with backoff and resumes from the partial file already on the server. Jobs live in the database, so a
+queue survives restarts: the source is (chat_id, message_id), a URL, or a file the Mini App staged
+under the temp directory (src "web:<path>").
 """
 import asyncio
 import errno
 import ftplib
 import logging
+import os
 import posixpath
 import time
 import urllib.error
@@ -18,7 +20,7 @@ from pyrogram.errors import FloodWait
 import store
 from perf import SETTINGS
 from remote import HostKeyChanged, Remote, RenameFailed
-from sources import Cancelled, HttpReader, MultiTgReader, SourceGone, TgReader
+from sources import Cancelled, HttpReader, MultiTgReader, SourceGone, StagedReader, TgReader
 from util import bar, env_int, eta, human
 
 MAX_RETRIES = env_int("MAX_RETRIES", 5, lo=1)
@@ -163,6 +165,11 @@ class Engine:
             if len(msgs) != len(id_list) or any(m.empty or not m.media for m in msgs):
                 raise SourceGone("one of the volumes was deleted from the chat, so the file can no longer be assembled")
             new_reader = lambda off: MultiTgReader(self.app, msgs, loop, off, tick, cancelled)  # noqa: E731
+        elif job["src"].startswith("web:"):  # a file the Mini App staged under the temp directory
+            path = job["src"][4:]
+            if not os.path.isfile(path):  # the staging disk was wiped (redeploy, container restart)
+                raise SourceGone("the uploaded copy was lost when the bot restarted - upload the file again")
+            new_reader = lambda off: StagedReader(path, off, tick, cancelled)  # noqa: E731
         elif job["src"].startswith("tg:"):
             _, chat_id, msg_id = job["src"].split(":")
             msg = await self.app.get_messages(int(chat_id), int(msg_id))
@@ -205,6 +212,12 @@ class Engine:
     async def _finish(self, job, state, note="", started=None):
         CANCEL.discard(job["id"])
         store.set_job(job["id"], state=state, error=note)
+        if state in ("done", "cancelled") and job["src"].startswith("web:"):
+            for path in (job["src"][4:], job["src"][4:] + ".part"):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass  # failed jobs keep their staged file so /retry can use it
         j = store.get_job(job["id"])
         took = f", {int(time.time() - started)}s" if started else ""
         if state == "done" and note.startswith("skipped"):

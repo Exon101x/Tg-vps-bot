@@ -11,6 +11,7 @@ WORKDIR /app
 COPY --from=build /wheels /wheels
 RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl && rm -rf /wheels
 COPY *.py ./
+COPY webapp/ ./webapp/
 USER bot
 ENV PYTHONUNBUFFERED=1 \
     SESSION_DIR=/data \

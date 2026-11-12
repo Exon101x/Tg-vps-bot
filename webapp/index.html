@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>vpsbot</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="gate" class="gate hidden">
+  <div class="card">
+    <h2>vpsbot</h2>
+    <p>This is the vpsbot Mini App. Open it from Telegram: send <code>/app</code> to your bot and tap
+       <b>Open the app</b>.</p>
+    <p class="dim">Sign-in is automatic inside Telegram - there is no password.</p>
+  </div>
+</div>
+
+<header id="top">
+  <div class="brand">vpsbot</div>
+  <button id="srv-chip" class="chip"></button>
+</header>
+
+<main id="views">
+  <section id="v-files" class="view">
+    <div class="pathbar">
+      <button id="up-dir" class="ghost" title="Go up">&#8679; up</button>
+      <div id="cwd" class="cwd">/</div>
+      <button id="mkdir" class="ghost">+ folder</button>
+    </div>
+    <div id="filelist" class="list"></div>
+    <div class="actionbar">
+      <label class="btn primary for-upload">
+        Upload file<input id="file" type="file" hidden>
+      </label>
+      <button id="fetch-btn" class="btn">Fetch URL</button>
+      <button id="reload" class="btn">Refresh</button>
+    </div>
+    <div id="progress" class="progress hidden">
+      <div class="bar"><div id="progress-fill"></div></div>
+      <div id="progress-text" class="dim"></div>
+    </div>
+  </section>
+
+  <section id="v-servers" class="view">
+    <div id="serverlist" class="list"></div>
+    <div class="card form">
+      <h3>Add a server</h3>
+      <input id="s-name" placeholder="name (e.g. vps1)">
+      <input id="s-target" placeholder="ssh://user@host or ftp://user:pass@host:21">
+      <input id="s-password" placeholder="SSH password (or paste the private key below)" type="password">
+      <textarea id="s-key" rows="4" placeholder="...or paste an SSH private key here"></textarea>
+      <button id="s-add" class="btn primary">Add server</button>
+    </div>
+  </section>
+
+  <section id="v-console" class="view">
+    <div id="term-out" class="term"><div class="dim">Commands run on the active SSH server, like /sh.
+      The working directory is remembered.</div></div>
+    <div class="terminput">
+      <input id="term-in" placeholder="$ command" autocomplete="off" spellcheck="false">
+      <button id="term-run" class="btn primary">Run</button>
+    </div>
+  </section>
+
+  <section id="v-stats" class="view">
+    <div id="stat-cards" class="cards"></div>
+    <div class="views">
+      <button class="btn" data-view="ps">Processes</button>
+      <button class="btn" data-view="ports">Ports</button>
+      <button class="btn" data-view="docker">Docker</button>
+      <button class="btn" data-view="disk">Disk</button>
+      <button class="btn" data-view="firewall">Firewall</button>
+      <button class="btn" data-view="failed">Failed</button>
+      <button class="btn" data-view="logins">Logins</button>
+      <button class="btn" data-view="updates">Updates</button>
+    </div>
+    <div id="view-out" class="term hidden"></div>
+  </section>
+
+  <section id="v-queue" class="view">
+    <div id="jobs" class="list"></div>
+    <h3 class="sub">Recent actions</h3>
+    <div id="audit" class="term small"></div>
+  </section>
+</main>
+
+<nav id="tabs">
+  <button class="tab active" data-tab="files">Files</button>
+  <button class="tab" data-tab="servers">Servers</button>
+  <button class="tab" data-tab="console">Console</button>
+  <button class="tab" data-tab="stats">Stats</button>
+  <button class="tab" data-tab="queue">Queue</button>
+</nav>
+
+<div id="toast" class="toast hidden"></div>
+<div id="sheet" class="sheet hidden"><div class="sheet-body"><div id="sheet-content"></div></div></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

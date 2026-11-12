@@ -15,6 +15,7 @@ switched to with `/use` — file and VPS commands all act on it. Every command w
 - [Folders and duplicate policies](#folders-and-duplicate-policies)
 - [VPS management (SSH servers)](#vps-management-ssh-servers)
 - [Shell access](#shell-access)
+- [The Mini App](#the-mini-app)
 - [Files over 2 GB](#files-over-2-gb)
 - [Bot status and misc](#bot-status-and-misc)
 
@@ -161,6 +162,36 @@ commands with sudo automatically when needed.
 
 Both log to `/audit`. `/cancel` bails out of an open password/key prompt or a `/multi` collection.
 
+## The Mini App
+
+| Command | What it does |
+|---|---|
+| `/app` | Sends the button that opens the **Mini App** — a web UI the bot serves on its own HTTP port, right inside Telegram |
+
+The app signs you in automatically: Telegram signs every request with your id, the bot verifies the
+signature against `BOT_TOKEN`, and your id still has to be in `ALLOWED_USERS` — no extra password,
+no session cookies. From the app you can:
+
+- **Files** — browse the active server (`ls`, navigate, mkdir, rename, delete), send any file to your
+  Telegram chat (volumes for big ones, like `/get`), upload files from your phone (chunked and resumable,
+  queued exactly like chat uploads: retries, resume, duplicate policies, folder templates) and run a
+  URL fetch on the server (like `/fetch`);
+- **Servers** — add (with connection test + host-key pinning), switch, delete, and edit per-server
+  settings: folder template, duplicate policy, monitoring;
+- **Console** — run shell commands on the active SSH server (the working directory is remembered; the
+  same dangerous-command confirmation as `/sh`);
+- **Stats** — the `/stats` overview cards plus every `/vps` view (processes, ports, docker, disk,
+  firewall, failed services, logins, updates);
+- **Queue** — the upload queue with retry/stop, and your audit trail.
+
+Everything the app does goes through the same store, queue and audit log as the chat commands.
+
+Requirements: the bot must be reachable over **HTTPS** (Telegram refuses to open plain-HTTP web apps).
+PaaS platforms give you an HTTPS URL automatically — set it as `WEBAPP_URL` and the button appears
+(the menu button opens the app too). On a plain VPS put nginx or Caddy in front and point
+`WEBAPP_URL` at the proxy's address; see [DEPLOY.md](DEPLOY.md#https-for-the-mini-app). Uploads from
+the app are capped by `WEB_MAX_MB` (default 4096).
+
 ## Files over 2 GB
 
 Telegram caps a single file at 2 GB for free accounts and **4 GB for Premium accounts**. Because the bot
@@ -199,3 +230,4 @@ them to an SSH server and `/join` there.
 | `/perf` | Detected CPU/RAM and the active speed profile (see [CONFIG.md](CONFIG.md#performance-tuning)) |
 | `/cancel` | Cancel an open prompt (password/key entry), a `/multi` collection or a pending confirmation |
 | `/about` | Version, uptime, database, queue length, session state |
+| `/app` | Open the Mini App (see [The Mini App](#the-mini-app)) |

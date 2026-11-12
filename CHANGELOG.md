@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.5.0 — the Mini App: a web UI for your servers, inside Telegram
+
+* **`/app` opens a Mini App** served by the bot's own HTTP port (the old one-line health endpoint grew
+  into a small router; `/health`, `/healthz` and any unknown path still answer `200 {"status":"ok"}`, so
+  platform health checks are unaffected). Five tabs, mobile-first, themed to the user's Telegram palette:
+  * **Files** — browse the active server, mkdir / rename / delete (with confirmations), send any file to
+    your Telegram chat (big ones arrive as volumes like `/get`), fetch a URL on the server, and **upload
+    files straight from your phone**: 4 MiB chunks, idempotent retries, resumable on flaky mobile links.
+    A finished upload is queued with `src web:<staged file>` and streamed out by the existing queue —
+    same retries, resume from `.part`, duplicate policies and folder templates as chat uploads. The
+    staged file is deleted when the job ends, kept for `/retry` on failure, swept after a day otherwise;
+    if a redeploy wiped it, the job fails with "upload the file again" instead of guessing.
+  * **Servers** — add a server (connection tested, host key pinned, same formats as `/add`), switch,
+    delete, and edit folder template / duplicate policy / monitoring.
+  * **Console** — shell commands on the active SSH server with the working directory remembered and the
+    same dangerous-command confirmation as `/sh`.
+  * **Stats** — the `/stats` cards plus every `/vps` view (processes, ports, docker, disk, firewall,
+    failed services, logins, updates).
+  * **Queue** — the upload queue with retry/stop and the audit trail. Every web action lands in `/audit`
+    with a `web:` prefix.
+* **Passwordless sign-in**: the app sends the initData Telegram signed at open; the bot verifies the
+  HMAC-SHA256 signature with `BOT_TOKEN` (constant-time, `auth_date` fresher than 24 h) and then applies
+  the same `ALLOWED_USERS` gate as the chat. No cookies, no sessions, no stored secrets; unauthenticated
+  requests get 401, allowed signature but wrong id gets 403.
+* **New env vars**: `WEBAPP_URL` (the bot's public HTTPS address — enables the `/app` button and sets the
+  chat menu button; Telegram refuses plain-HTTP web apps, so `http://` values are ignored) and
+  `WEB_MAX_MB` (staging cap for app uploads, default 4096, 0 = unlimited). `.env.example`,
+  CONFIG.md, DEPLOY.md (nginx + Caddy snippets) and ARCHITECTURE.md document them.
+* **Docker**: the image now ships the `webapp/` assets (the old `COPY *.py` would have 404'd the app);
+  a check guards this.
+* New `tests/check_webapp.py` — 51 checks: the signature scheme (valid/tampered/stale/wrong token/no
+  hash/renamed field), the HTTP router (health paths, static whitelist + traversal, CSP header, 401/403/
+  404/405), the server and file APIs against a real local SSH server, the full chunked-upload path
+  through the real queue engine (byte-for-byte verification server-side, idempotent chunk retries,
+  skip-ahead refused, staged-file cleanup), and the lost-staging failure. Suite is now 13 check scripts.
+
 ## 1.4.0 — direct 2–4 GB uploads, per-file server picker
 
 * **Files up to 4 GB now upload directly.** Premium accounts can send up to 4 GB to Telegram, and because

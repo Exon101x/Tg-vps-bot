@@ -13,6 +13,7 @@ no domain and no webhook. Anything that runs a Docker image or Python 3.10+ work
 - [Other container platforms](#other-container-platforms)
 - [Big servers](#big-servers)
 - [Sessions, locking and restarts](#sessions-locking-and-restarts)
+- [HTTPS for the Mini App](#https-for-the-mini-app)
 - [Troubleshooting](#troubleshooting)
 
 ## Fastest way: the setup wizard
@@ -166,6 +167,44 @@ space.
 * While running, the bot refreshes a lock row in the database every 15 s. If another copy takes the lock,
   this one shuts down instead of fighting over the session. `DISABLE_LOCK=1` turns this off (single-copy
   setups only).
+
+## HTTPS for the Mini App
+
+The Mini App (`/app`) is served by the bot's own HTTP port, but Telegram only opens web apps from an
+**HTTPS** address with a valid certificate. The two-step recipe:
+
+1. Expose the port over HTTPS:
+
+   * **Render, Heroku, Railway, Fly.io, Koyeb, Cloud Run** — you already have an HTTPS URL; nothing to do.
+   * **Your own VPS (Docker or systemd)** — set `HEALTH_BIND=127.0.0.1` so the port is not exposed raw,
+     and proxy it with a certificate from Let's Encrypt:
+
+     ```nginx
+     # nginx: proxy the app on https://vps.example.com
+     location / {
+         proxy_pass http://127.0.0.1:8080;      # your HEALTH_PORT
+         proxy_set_header Host $host;
+         client_max_body_size 0;                # uploads through the app: no nginx cap
+     }
+     ```
+
+     ```caddy
+     # Caddy (automatic HTTPS) — a two-line Caddyfile
+     vps.example.com {
+         reverse_proxy 127.0.0.1:8080
+     }
+     ```
+
+2. Point the bot at it: `WEBAPP_URL=https://vps.example.com` (on Render, just the service's public URL).
+
+Now `/app` sends the open button, the chat menu button opens the app too, and users sign in with their
+Telegram id automatically (the bot verifies Telegram's signature — see
+[ARCHITECTURE.md](ARCHITECTURE.md#5-the-mini-app-webapi)). Without `WEBAPP_URL` everything still works
+from the chat; the button just isn't there.
+
+Notes: keep-alive pings (`KEEP_ALIVE_URL`) can point at the same URL. If a firewall sits in front, allow
+the proxy to reach `HEALTH_PORT`. Uploads through the app are capped by `WEB_MAX_MB` (default 4096) and
+staged in the temp directory, so leave some disk headroom on the bot's host.
 
 ## Troubleshooting
 

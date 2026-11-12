@@ -29,10 +29,11 @@ load_dotenv()  # a local .env file can configure everything; real environment va
 from pyrogram import Client, filters, idle  # noqa: E402
 from pyrogram.enums import ParseMode
 from pyrogram.errors import AuthKeyDuplicated, Unauthorized
-from pyrogram.types import BotCommand, InlineKeyboardButton as Btn, InlineKeyboardMarkup
+from pyrogram.types import BotCommand, InlineKeyboardButton as Btn, InlineKeyboardMarkup, MenuButtonWebApp, WebAppInfo
 
 import session_sync
 import store
+import webapi
 from jobs import Engine, is_permanent
 from largefiles import choose_volume, join_script, order_volumes, plan_volumes, volume_name
 from perf import describe as describe_perf
@@ -65,6 +66,7 @@ MEM_ALERT = env_int("MEM_ALERT", 90, lo=1, hi=100)
 MAX_FETCH = env_int("MAX_FETCH_MB", 0, lo=0) * 1024 * 1024  # 0 = no limit for /fetch downloads
 TG_MAX = env_int("TG_MAX_MB", 1900, lo=1) * 1024 * 1024  # largest single file /get sends; Telegram allows 2 GB for bots
 TG_IN_MAX = 4 * 1024 ** 3  # the biggest file Telegram itself can carry (Premium accounts upload up to 4 GB): 2-4 GB files stream directly, no volumes needed
+WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")  # public HTTPS address of the mini app (the /app button and the menu button)
 
 DEFAULT_PORTS = {"ftp": 21, "ftps": 21, "ssh": 22}
 NAME_RE = re.compile(r"[\w.-]{1,24}")
@@ -131,8 +133,17 @@ Caption "> path/name.ext" (or "> dir/") sets the destination.
 /multi [name] ... /done - collect the volumes of a file over 4 GB (or without Premium) and upload them as ONE file to any server
 /perf - detected CPU/RAM and the speed profile in use
 /fetch <url> [name] - the server downloads a URL (ssh) or the bot streams it (ftp); no size limit
+/app - the Mini App: manage servers, browse and upload files, a shell console and
+VPS stats from a web UI inside Telegram (needs WEBAPP_URL, the bot's public HTTPS address)
 Files over 4 GB (or over 2 GB without Premium): split them first (7-Zip volumes, or `split -b 1900M -d -a 3 --numeric-suffixes=1 file file.`),
-then /multi, send all the .001 .002 ... parts, and /done: one file lands on any FTP/FTPS/SFTP server."""
+then /multi, send all the .001 .002 ... parts, and /done: one file lands on any FTP/FTPS/SFTP server.
+
+MINI APP (/app)
+A web UI served by the bot itself on its health port. Sign-in is automatic: Telegram signs
+the request and the bot checks the signature, so there is no extra password. Browse files, upload
+from your phone (resumable, queued like any other upload), run shell commands, watch VPS stats -
+and the buttons appear once WEBAPP_URL points at the bot's public HTTPS address (PaaS platforms
+provide one automatically; on a plain VPS put nginx or Caddy in front for HTTPS)."""
 
 
 # ---------------------------------------------------------------- helpers
@@ -470,6 +481,20 @@ def menu_kb():
 @app.on_message(auth & filters.command(["start", "help"]))
 async def start(_, m):
     await m.reply(HELP)
+
+
+@app.on_message(auth & filters.command("app"))
+async def app_cmd(_, m):
+    """Open the Mini App: the web UI the bot serves on its own HTTP port."""
+    if WEBAPP_URL.startswith("https://"):
+        await m.reply("📱 vpsbot Mini App: your servers, files, a shell console and VPS stats, right inside Telegram.",
+                      reply_markup=InlineKeyboardMarkup([[Btn("📱 Open the app", web_app=WebAppInfo(url=WEBAPP_URL))]]))
+    else:
+        await m.reply(
+            "The Mini App is served by the bot itself, but Telegram only opens web apps from an HTTPS address.\n"
+            "Set WEBAPP_URL to the bot's public HTTPS URL (Render, Heroku, Railway and friends give you one "
+            "automatically - the same address as the health port; on a plain VPS put nginx or Caddy in front) "
+            "and then /app will have the button.\nUntil then, everything works from this chat.")
 
 
 def parse_target(arg):
@@ -1361,26 +1386,14 @@ COMMANDS = [
     ("queue", "Upload queue"), ("retry", "Retry failed uploads"), ("folder", "Auto-folder template"),
     ("servers", "Saved servers"), ("add", "Add a server"), ("monitor", "Alerts on/off"),
     ("ask", "Pick the server per file"), ("audit", "Action log"), ("about", "Bot status"), ("help", "All commands"),
+    ("app", "Web UI for servers, files and console"),
 ]
 
 
 async def health_server(port):
-    """Tiny HTTP endpoint so PaaS health checks (which need an open $PORT) stay green.
-    PaaS platforms need 0.0.0.0; on your own VPS set HEALTH_BIND=127.0.0.1 so only localhost sees it."""
-    async def handle(reader, writer):
-        try:
-            await asyncio.wait_for(reader.readline(), 5)
-            body = b'{"status":"ok"}'
-            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
-                         + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
-            await writer.drain()
-        except Exception:
-            pass
-        finally:
-            writer.close()
-
-    bind = os.getenv("HEALTH_BIND") or "0.0.0.0"
-    return await asyncio.start_server(handle, bind, port)
+    """The bot's HTTP port: the Mini App plus its JSON API, and /health (or any unknown path) with a 200
+    so PaaS health checks still pass. On your own VPS set HEALTH_BIND=127.0.0.1 and put a TLS proxy in front."""
+    return await webapi.start(port)
 
 
 async def start_client():
@@ -1421,11 +1434,17 @@ def lock_lost():
 async def main():
     global SESSION_SOURCE
     port = env_int("HEALTH_PORT", 0, lo=0, hi=65535) or env_int("PORT", 0, lo=0, hi=65535)
+    webapi.configure(app, engine, BOT_TOKEN, ALLOWED, WEBAPP_URL)  # before the port opens: the app answers at once
     health = await health_server(port) if port else None  # up first, so the platform's health check passes at once
     await asyncio.to_thread(session_sync.acquire_lock)  # waits while an old copy is still shutting down
     SESSION_SOURCE = session_sync.restore()  # after the lock, so the old copy's final snapshot is what we restore
     await start_client()
     await app.set_bot_commands([BotCommand(c, d) for c, d in COMMANDS])
+    if WEBAPP_URL.startswith("https://"):  # the menu button opens the Mini App from any chat
+        try:
+            await app.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Open app", web_app=WebAppInfo(url=WEBAPP_URL)))
+        except Exception as e:
+            logging.warning("could not set the menu button: %s", e)
     engine.start()  # resume anything that was queued when the bot last stopped
     await asyncio.to_thread(session_sync.snapshot, True)
     if os.getenv("RENDER") and store.URL.startswith("sqlite"):

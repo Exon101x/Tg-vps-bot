@@ -14,6 +14,7 @@ variable stops startup, with a clear message.
 - [Database](#database)
 - [Hosting and runtime](#hosting-and-runtime)
 - [Monitoring](#monitoring)
+- [Mini App authentication](#mini-app-authentication)
 - [Transfer limits](#transfer-limits)
 - [Performance tuning](#performance-tuning)
 - [Session and single-instance lock](#session-and-single-instance-lock)
@@ -45,8 +46,10 @@ Tables are created automatically and older databases upgrade in place. To move b
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PORT` / `HEALTH_PORT` | unset | If set, the bot runs a tiny HTTP server answering `200 {"status":"ok"}` on **any path** (Render uses `/healthz`). PaaS platforms set `PORT` themselves; `HEALTH_PORT` is for hosts that don't |
-| `HEALTH_BIND` | `0.0.0.0` | Bind address of that server. `0.0.0.0` suits PaaS; use `127.0.0.1` on your own VPS so the endpoint is not exposed |
+| `PORT` / `HEALTH_PORT` | unset | If set, the bot runs an HTTP server on that port: it serves the **Mini App** (`/app`, `/static/…`, `POST /api/…`) and still answers `200 {"status":"ok"}` on any other path (Render checks `/healthz`, Docker `/health`). PaaS platforms set `PORT` themselves; `HEALTH_PORT` is for hosts that don't |
+| `HEALTH_BIND` | `0.0.0.0` | Bind address of that server. `0.0.0.0` suits PaaS; use `127.0.0.1` on your own VPS and put a TLS proxy in front |
+| `WEBAPP_URL` | unset | The bot's public **HTTPS** address (e.g. `https://your-app.onrender.com`). When set, `/app` gets its button and the chat menu button opens the Mini App. Telegram refuses plain-HTTP web apps, so an `http://` value is ignored |
+| `WEB_MAX_MB` | `4096` | Size cap for files uploaded through the Mini App (they are staged in the temp directory before the queue streams them out; `0` = no limit) |
 | `KEEP_ALIVE` | unset | `1` pings a URL every `KEEP_ALIVE_INTERVAL` seconds so free web services (Render) don't sleep. Set `0` on paid plans |
 | `KEEP_ALIVE_URL` | `RENDER_EXTERNAL_URL` | The URL to ping; defaults to the one Render injects |
 | `KEEP_ALIVE_INTERVAL` | `600` | Seconds between pings |
@@ -64,6 +67,14 @@ State is per server: an alert fires once when it appears and once more when it c
 | `MONITOR_INTERVAL` | `300` | ≥ 30 | Seconds between checks |
 | `DISK_ALERT` | `90` | 1–100 | Disk % that triggers an alert |
 | `MEM_ALERT` | `90` | 1–100 | Memory % that triggers an alert |
+
+## Mini App authentication
+
+No configuration of its own: the web app signs in with the initData Telegram produces when it opens.
+The backend verifies the HMAC-SHA256 signature with `BOT_TOKEN` (the algorithm from Telegram's docs,
+constant-time compare, and `auth_date` must be fresher than 24 h), then applies the same `ALLOWED_USERS`
+gate as the chat. There are no cookies, no sessions and no stored secrets; every API request carries
+its own verified signature. See [ARCHITECTURE.md](ARCHITECTURE.md#the-mini-app-webapi) for the flow.
 
 ## Transfer limits
 

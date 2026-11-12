@@ -3,6 +3,7 @@ so a slow server automatically slows the download (backpressure) and nothing tou
 import asyncio
 import http.client
 import ipaddress
+import os
 import socket
 import urllib.error
 from bisect import bisect_right
@@ -313,3 +314,28 @@ class HttpReader(Reader):
                     closer.close()
             except Exception:
                 pass
+
+
+class StagedReader(Reader):
+    """Reads a file the Mini App uploaded in chunks to the staging directory (src "web:<path>").
+    The staged file survives restarts, so a queued web upload resumes after a redeploy like any
+    other job; if the staging disk was wiped, the job fails cleanly instead of guessing."""
+
+    def __init__(self, path, offset, on_progress, cancelled):
+        super().__init__(offset, on_progress, cancelled)
+        self.total = os.path.getsize(path)  # missing file -> the caller turns this into SourceGone
+        self._f = open(path, "rb")
+        self._f.seek(offset)
+
+    def read(self, size=-1):
+        data = self._f.read(size if size and size > 0 else 1 << 20)
+        if data:
+            self._advance(len(data))
+        return data
+
+    def close(self):
+        try:
+            self._f.close()
+        except Exception:
+            pass
+

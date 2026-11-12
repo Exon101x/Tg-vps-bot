@@ -28,10 +28,16 @@ the testing strategy. For what you can type in chat see [COMMANDS.md](COMMANDS.m
 
 ```
 bot.py            The Telegram layer: auth gate, every /command handler, confirmation dialogs,
-                  the monitoring loop, the health endpoint, keep-alive. Everything user-facing lives here.
+                  the monitoring loop, keep-alive. Everything user-facing lives here.
+
+webapi.py         The Mini App: the bot's HTTP port serves the web UI (webapp/) and a JSON API.
+                  Telegram initData HMAC authentication (no cookies, no sessions), the file
+                  manager, the console, stats, and the chunked resumable web-upload path.
 
 jobs.py           The persistent upload queue worker: picks jobs per server (PARALLEL_PER_SERVER),
                   drives the transfer, updates progress, retries with backoff, resumes from .part files.
+                  Sources: tg: (a message), tgm: (volumes to join), web: (a staged Mini App upload),
+                  http: (a URL).
 
 sources.py        Streaming sources: parallel windowed downloads from Telegram (length-checked) and
                   HTTP(S) with Range resume. The SSRF guard lives here: host resolved once, connection
@@ -64,6 +70,8 @@ healthcheck.py    What the Docker HEALTHCHECK runs: hits the health endpoint.
 
 Dependency direction: `bot.py` → `jobs.py` → `sources.py` + `remote.py` → `store.py` → `backends.py`.
 `deploy.py` and `migrate.py` are standalone tools; `perf.py`, `largefiles.py`, `util.py` are leaf libraries.
+`webapi.py` shares `bot.py`'s helpers through late imports (it runs inside the same process) and uses the
+same `store`/`remote`/`jobs` layers, so a web action and the equivalent chat action behave identically.
 
 ## The main data flows
 
@@ -111,6 +119,29 @@ lock: a row in kv, heartbeaten every 15 s; a second copy waits until LOCK_TTL pa
 ```
 
 That pair is what makes ephemeral-disk hosts (Render free tier) and zero-downtime deploys work.
+
+### 5. The Mini App (`webapi.py`)
+
+```
+Telegram WebView ──HTTPS──> webapi.py on the bot's health port
+   GET  /app, /static/*      the UI (vanilla HTML/JS, no build step)
+   POST /api/<route>          every request carries the initData Telegram signed at open
+        │  verify HMAC-SHA256(WebAppData, BOT_TOKEN), constant-time, auth_date < 24 h
+        │  the user id must be in ALLOWED_USERS (the same gate as the chat)
+        ▼
+   routes: ls/cd/mkdir/rm/mv · term (the /sh guard + audit) · stats/view (the /vps views)
+           send (volumes to the user's chat) · fetch · servers/* · jobs · audit
+        │
+        ▼  uploads: up/init → up/chunk (4 MiB, idempotent, resumable) → up/finish
+   staged in tmpdir/vpsbot-webuploads ──> a job row with src web:<path>
+        ▼
+   jobs.py streams the staged file to the server like any upload (retries, resume, dup policy,
+   folder templates); the staged file is deleted when the job ends (kept for /retry on failure,
+   swept after a day otherwise)
+```
+
+`/health` and every unknown path still answer `200 {"status":"ok"}`, so platform health checks are
+unaffected. `WEBAPP_URL` only feeds the `/app` button and the menu button - Telegram requires HTTPS.
 
 ## Database schema
 

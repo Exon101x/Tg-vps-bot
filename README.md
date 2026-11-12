@@ -34,17 +34,18 @@ Heroku or any VPS with Python 3.10+.
 1. [Features at a glance](#features-at-a-glance)
 2. [Quick start](#quick-start)
 3. [Commands at a glance](#commands-at-a-glance)
-4. [Big files: 2 GB, 4 GB and beyond](#big-files-2-gb-4-gb-and-beyond)
-5. [Configuration](#configuration)
-6. [Databases](#databases)
-7. [Speed profiles](#speed-profiles)
-8. [Deployment](#deployment)
-9. [Security](#security)
-10. [Development and CI](#development-and-ci)
-11. [Repository layout](#repository-layout)
-12. [FAQ](#faq)
-13. [Limits and testing status](#limits-and-testing-status)
-14. [License](#license)
+4. [The Mini App](#the-mini-app)
+5. [Big files: 2 GB, 4 GB and beyond](#big-files-2-gb-4-gb-and-beyond)
+6. [Configuration](#configuration)
+7. [Databases](#databases)
+8. [Speed profiles](#speed-profiles)
+9. [Deployment](#deployment)
+10. [Security](#security)
+11. [Development and CI](#development-and-ci)
+12. [Repository layout](#repository-layout)
+13. [FAQ](#faq)
+14. [Limits and testing status](#limits-and-testing-status)
+15. [License](#license)
 
 ## Features at a glance
 
@@ -55,6 +56,7 @@ Heroku or any VPS with Python 3.10+.
 | **Files up to 4 GB** | sent directly like any other file (Premium sender) — no volumes, no splitting |
 | **Files beyond 4 GB** | `/multi` + `/done` joins split volumes **on the fly** into one file on any server |
 | **Per-file server picker** | `/ask on` — forward or upload a file, tap the destination server, done |
+| **Mini App** | `/app` — a web UI inside Telegram: file manager, uploads from your phone, SSH console, VPS stats; sign-in is your Telegram id, no password |
 | **URL downloads** | `/fetch <url>` pulls HTTP(S) straight to the server — resumable, SSRF-guarded |
 | **Server → Telegram** | `/get` auto-splits into `.001 .002 …` volumes when needed, staging one at a time |
 | **Remote file manager** | `/pwd` `/cd` `/ls` `/mkdir` `/mv` `/rm` |
@@ -112,12 +114,31 @@ Full syntax, arguments and examples: **[docs/COMMANDS.md](docs/COMMANDS.md)**.
 |---|---|
 | Servers | `/add` `/servers` `/use` `/del` `/status` `/monitor` `/audit` `/about` |
 | VPS admin (SSH) | `/vps` `/stats` `/ps` `/ports` `/logins` `/updates` `/disk` `/firewall` `/failed` `/service` `/logs` `/docker` `/upgrade` `/reboot` |
-| Shell | `/sh <cmd>` · `/term` (terminal mode) |
+| Shell | `/sh <cmd>` · `/term` (terminal mode) · `/app` (the Mini App) |
 | Files | send any file (streamed, up to 4 GB direct with Premium) · `/fetch` `/get` `/join` `/multi`+`/done` |
 | Remote filesystem | `/pwd` `/cd` `/ls` `/mkdir` `/mv` `/rm` |
 | Upload queue | `/queue` `/retry` `/stop` `/usage` |
 | Folders & duplicates | `/folder <template>` · `/ondup <policy>` · `/ask on|off` (server picker per file) |
 | Misc | `/start` `/help` `/cancel` `/perf` |
+
+## The Mini App
+
+**`/app`** opens a web UI the bot serves on its own HTTP port — right inside Telegram, mobile-friendly.
+Signing in is automatic: Telegram signs every request with your id, the bot verifies the signature and
+applies the same `ALLOWED_USERS` gate as the chat. No passwords, no cookies, nothing stored.
+
+| Tab | What you can do |
+|---|---|
+| **Files** | browse the active server, create folders, rename, delete; send any file to your Telegram chat (volumes for big ones); **upload from your phone** — chunked, resumable, queued exactly like chat uploads; fetch a URL on the server |
+| **Servers** | add (connection tested, host key pinned), switch, delete; edit folder template, duplicate policy, monitoring |
+| **Console** | run shell commands on the active SSH server — remembered working directory, the same dangerous-command confirmation as `/sh` |
+| **Stats** | the `/stats` overview plus every `/vps` view: processes, ports, docker, disk, firewall, failed services, logins, updates |
+| **Queue** | the upload queue with retry/stop, and the audit trail |
+
+To enable the button, set `WEBAPP_URL` to the bot's public HTTPS address — PaaS platforms (Render,
+Heroku, Railway, …) give you one automatically; on a plain VPS put nginx or Caddy in front (a two-line
+Caddyfile is in [docs/DEPLOY.md](docs/DEPLOY.md#https-for-the-mini-app)). Uploads through the app are
+capped by `WEB_MAX_MB` (default 4096). Without `WEBAPP_URL` everything still works from the chat.
 
 ## Big files: 2 GB, 4 GB and beyond
 
@@ -158,7 +179,7 @@ is the template.
 | Area | Variables |
 |---|---|
 | Core | `DATABASE_URL` (default `sqlite:///bot.db`) · `PERFORMANCE` (`auto` by default) · `LOG_LEVEL` |
-| Health endpoint | `PORT` · `HEALTH_PORT` · `HEALTH_BIND` |
+| HTTP port / Mini App | `PORT` · `HEALTH_PORT` · `HEALTH_BIND` · `WEBAPP_URL` (public HTTPS address that enables the `/app` button) · `WEB_MAX_MB` (app upload cap, default 4096) |
 | Transfer tuning | `TG_PARALLEL` · `TG_WINDOW_MB` · `SFTP_WINDOW_MB` · `FTP_BLOCK_KB` · `PARALLEL_PER_SERVER` |
 | Size limits | `TG_MAX_MB` · `MAX_FETCH_MB` · `MAX_RETRIES` |
 | Monitoring | `MONITOR_INTERVAL` · `DISK_ALERT` · `MEM_ALERT` |
@@ -249,9 +270,12 @@ Dependabot watches pip, Docker and GitHub Actions weekly; every bump goes throug
 <a href="docs/ARCHITECTURE.md"><b>docs/ARCHITECTURE.md</b></a>.</summary>
 
 ```text
-bot.py            Telegram handlers, start-up, health endpoint            (~1450 lines)
+bot.py            Telegram handlers, start-up, keep-alive                         (~1470 lines)
+webapi.py         the Mini App: HTTP server on the health port, initData auth, JSON API,
+                  chunked resumable web uploads, console/stats/view endpoints
+webapp/           the Mini App UI (vanilla HTML/CSS/JS, no build step, served by webapi.py)
 jobs.py           persistent upload queue: retries, resume, stop/retry, speed/ETA
-sources.py        streaming sources: parallel Telegram windows, HTTP with Range (SSRF-guarded)
+sources.py        streaming sources: parallel Telegram windows, HTTP with Range (SSRF-guarded), staged web uploads
 largefiles.py     volume planning for /get, volume ordering for /multi, the /join script
 remote.py         FTP / FTPS / SSH + SFTP client, host-key pinning, path sanitising
 store.py          domain API + Fernet encryption
@@ -262,8 +286,8 @@ deploy.py         deployment setup wizard (stdlib only)
 migrate.py        copy data between databases
 healthcheck.py    Docker HEALTHCHECK helper
 Dockerfile, docker-compose.yml, render.yaml, heroku.yml, Procfile, deploy/vpsbot.service
-tests/            12 check scripts run by pytest: local FTP + SSH servers, in-memory
-                  databases, 24 security + 22 big-file checks
+tests/            13 check scripts run by pytest: local FTP + SSH servers, in-memory
+                  databases, 24 security + 22 big-file + 51 mini-app checks
 docs/             COMMANDS.md, CONFIG.md, DEPLOY.md, ARCHITECTURE.md
 ```
 
