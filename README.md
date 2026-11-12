@@ -21,7 +21,8 @@ Heroku or any VPS with Python 3.10+.
 [![Last commit](https://img.shields.io/github/last-commit/Exon101x/Tg-vps-bot)](https://github.com/Exon101x/Tg-vps-bot/commits/main)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[Commands](docs/COMMANDS.md) · [Configuration](docs/CONFIG.md) · [Deployment](docs/DEPLOY.md) ·
+[Commands](docs/COMMANDS.md) · [Configuration](docs/CONFIG.md) ·
+[Deployment — from-scratch guide](docs/DEPLOY.md) ·
 [Architecture](docs/ARCHITECTURE.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) ·
 [Changelog](CHANGELOG.md)
 
@@ -77,6 +78,10 @@ Heroku or any VPS with Python 3.10+.
 | **Runs anywhere** | Docker, systemd, Render, Heroku, Railway, Fly.io, Koyeb — health endpoint, DB-backed session snapshots, single-instance lock |
 
 ## Quick start
+
+New here? The full walkthrough — creating the bot, getting API credentials, picking a host,
+deploying, verifying, troubleshooting — lives in **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+The short version:
 
 ### Option A — the setup wizard (recommended)
 

@@ -170,7 +170,7 @@ No configuration of its own: the web app signs in with the initData Telegram pro
 The backend verifies the HMAC-SHA256 signature with `BOT_TOKEN` (the algorithm from Telegram's docs,
 constant-time compare, and `auth_date` must be fresher than 24 h), then applies the same `ALLOWED_USERS`
 gate as the chat. There are no cookies, no sessions and no stored secrets; every API request carries
-its own verified signature. See [ARCHITECTURE.md](ARCHITECTURE.md#5-the-mini-app-webapi) for the flow.
+its own verified signature. See [ARCHITECTURE.md](ARCHITECTURE.md#5-the-mini-app-webapipy) for the flow.
 
 ## Transfer limits
 

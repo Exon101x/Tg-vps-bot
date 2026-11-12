@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.8.8 — DEPLOY.md rebuilt as the complete from-scratch deployment guide
+
+* **A real walkthrough, in order.** The old page was organized by platform; the new one
+  walks a first-time deployer through every step in order: what to gather → create the bot
+  with @BotFather (including `/setuserpic` etc. and getting your numeric id) → the
+  my.telegram.org `API_ID`/`API_HASH` step with a do-not-commit warning → a host-picking
+  table with the SQLite-vs-external-DB decision rule → the four deploy paths (wizard,
+  Render blueprint, Docker/compose/ghcr, hardened systemd) → a five-check verification
+  checklist (`Started.` log line, `/health`, `/start`, `/add` + file round-trip, `/vps`)
+  → what to do in the first hour (back up `SECRET_KEY`, nightly DB dump, optional env
+  vars for admins/Mini App/payments/VPS node).
+* **Troubleshooting rebuilt.** "The 8 classics" in narrative form (unhealthy deploy, the
+  lock wait, `AUTH_KEY_DUPLICATED`, free-plan sleep, `SECRET_KEY` loss, DB not ready,
+  wiped-disk data loss, bad API pair) then an expanded symptom table — new rows cover
+  `/add` timeouts, FTP-vs-SFTP port blocks, uploads stuck in `queued`, the 2 GB
+  non-Premium wall, Mini App blank/sign-in failures, payment webhooks not landing,
+  `/admin` access, and "nothing in the logs at all". Plus a log-reading cheat sheet and
+  a four-step last-resort ladder ending in `deploy.py --check --verify` and
+  `RESET_SESSION=1`.
+* **Tips and tricks section**: forcing speed profiles and which knob helps on
+  high-latency links, free-tier survival, multi-user/admin setup, `setup_gateway.py`
+  for real payments, the `/multi` over-2 GB streaming join, `/monitor on` alerts,
+  disk hygiene, a 5-minute host-migration recipe (same `SECRET_KEY` + `DATABASE_URL`
+  → session and queue restore), and pinning the CI image by commit SHA.
+* **Link hygiene, enforced.** New `scripts/check_links.py` validates every intra-repo
+  markdown link (file + heading anchor, GitHub slug rules). It immediately caught a
+  pre-existing broken anchor: `ARCHITECTURE.md#5-the-mini-app-webapi` — GitHub's real
+  slug for the backticked heading is `#5-the-mini-app-webapipy`; fixed in CONFIG.md
+  and DEPLOY.md. All four external anchors into DEPLOY.md (`#render`,
+  `#systemd-bare-vps-raspberry-pi`, `#other-container-platforms`,
+  `#https-for-the-mini-app`) are preserved, so no other page needed changes.
+* README's doc index and quick start now point at the guide.
+
 ## 1.8.7 — chat UI redesign: every card aligned, every keyboard a grid
 
 * **A shared formatting kit.** Four small helpers now shape everything the
