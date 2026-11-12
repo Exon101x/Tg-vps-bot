@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.8.0 — Payment gateways: UPI and crypto, auto-confirming
+
+* **Payment gateway system** (`payments.py`): three optional, independent ways to take money —
+  all configured with env vars, all surfacing as buttons under `/plans` → **Buy** in chat and in
+  the Mini App's Hosting tab, all coexisting with the classic `/paid <reference>` assisted flow.
+* **UPI, auto-verified — YouPI-PG** (the self-hosted gateway from
+  [github.com/youpi-pg/YouPI-PG](https://github.com/youpi-pg/YouPI-PG)): `YOUPI_URL` +
+  `YOUPI_WEBHOOK_SECRET` create a checkout session (`POST /api/v1/payments`, `X-Merchant-Id`,
+  `X-Merchant-Api-Key`, idempotency key per order) and hand the buyer a checkout link — dynamic
+  QR, one-tap deep links into GPay/PhonePe/Paytm/CRED, WhatsApp OTP, whatever the owner's instance
+  does. When YouPI's banking observers see the money, the signed webhook
+  (`X-Gateway-Signature: sha256=<HMAC-SHA256 of the raw body>`, verified constant-time) lands on
+  `{WEBAPP_URL}/pay/youpi/cb` and the order activates itself: plan live, VPS provisioned,
+  credentials in the buyer's chat, receipt to the admins — zero clicks. Amounts are checked
+  against the order to the paisa; a mismatch alerts the admins instead of activating. If the
+  webhook never arrives, the Mini App's status poll self-heals the activation from the gateway's
+  live session status. INR prices (`SUBSCRIPTION_CURRENCY=INR`).
+* **UPI, direct**: `UPI_VPA` / `UPI_NAME` render a proper `upi://pay` intent link (pa/pn/am/cu/tr)
+  plus a QR (generated locally, pure-python `qrcode` + `pypng`, no Pillow) — pay in any UPI app,
+  then confirm with `/paid <UTR>` as before.
+* **Crypto, auto-verified — CryptAPI** ([cryptapi.io](https://cryptapi.io), no signup, no KYC,
+  100+ coins, payouts to the owner's **own wallets**): `CRYPTAPI_<COIN>_ADDR` (e.g.
+  `CRYPTAPI_BTC_ADDR`, `CRYPTAPI_TRC20_USDT_ADDR`) adds a coin button. Each purchase mints a
+  payment address with a per-order nonce; the price converts to the coin at the live rate
+  (`/convert/`). Callbacks (`{WEBAPP_URL}/pay/cryptapi/cb`) are verified with `X-CA-Signature` —
+  RSA-SHA256 over the exact request URL against CryptAPI's published pubkey, the scheme their
+  official plugins use — then nonce-checked, accumulated per transaction uuid (partial payments
+  count, replays don't), and the confirmed total within `CRYPTAPI_TOLERANCE` % (default 1)
+  activates the order automatically. Pending transactions notify the buyer first; every ack is
+  the literal `*ok*` their retry loop expects.
+* **Verified end-to-end**: every webhook is signature-checked before anything happens, amounts
+  must match, approvals are idempotent (replayed/retried callbacks can never activate twice) and
+  everything lands in the audit log. 26 new checks in `tests/check_payments.py` cover the intent
+  link, QR output, YouPI HMAC accept/reject/amount-mismatch/replay, CryptAPI RSA accept/reject/
+  nonce/replay/partial payments, and the Mini App pay routes — run over real HTTP.
+* **Chat UX**: the Buy button now opens a payment picker (gateway buttons + the manual
+  reference path); YouPI checkouts edit in place with an open-checkout button; UPI/crypto send
+  a QR photo with one-tap copy targets. The `buy:`/`pay:`/`pl:`/`ord:` callback kinds are now
+  all wired (they silently did nothing before — a real bug), and `/plans`, `/mysub`, `/myvps`,
+  `/paid`, `/hosting` are in the Telegram command menu.
+* **Mini App**: the Hosting tab pay box grows payment-method buttons, a live payment card
+  (QR, address/amount with copy chips, open-checkout / open-UPI-app buttons) and a 5-second
+  status poll that refreshes into the plans view the moment the order activates.
+* **Docs**: README (feature row + checkout table + security callout), `docs/CONFIG.md` (new
+  *Payment gateways* section), `.env.example`, `/help`. Dependencies: `qrcode==8.2` +
+  `pypng==0.20220715.0` (pure-python QR → PNG, no Pillow).
+
 ## 1.7.0 — Subscriptions: sell plans, VPSes and bot hosting
 
 * **A full subscription system** (`subscriptions.py`): a plan catalog every owner can sell —

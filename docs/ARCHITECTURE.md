@@ -61,6 +61,11 @@ hosting.py        VPS provisioning on the owner's host node over SSH: alnum-only
                   credentials, admin-defined command templates, renewal extensions, and the
                   expiry sweep the monitor loop runs.
 
+payments.py       Payment gateways, all optional: YouPI-PG (self-hosted UPI checkout, HMAC-SHA256
+                  webhooks), direct UPI intent links + locally generated QR, and CryptAPI
+                  (crypto to the owner's own wallets, RSA-SHA256 signed callbacks). Order
+                  state lives in the kv store ("pay:<order id>": nonces, refs, received totals).
+
 session_sync.py   Telegram session snapshots (encrypted into the kv table) and the single-instance
                   lock with heartbeats - the two mechanisms behind zero-downtime deploys.
 
@@ -78,7 +83,8 @@ healthcheck.py    What the Docker HEALTHCHECK runs: hits the health endpoint.
 ```
 
 Dependency direction: `bot.py` → `jobs.py` → `sources.py` + `remote.py` → `store.py` → `backends.py`;
-`subscriptions.py` and `hosting.py` sit on `store.py` (hosting also uses `remote.py` for the node).
+`subscriptions.py`, `hosting.py` and `payments.py` sit on `store.py` (hosting also uses `remote.py`
+for the node; payments' webhook handlers call back into `bot.py`'s fulfillment through `webapi.py`).
 `deploy.py` and `migrate.py` are standalone tools; `perf.py`, `largefiles.py`, `util.py` are leaf libraries.
 `webapi.py` shares `bot.py`'s helpers through late imports (it runs inside the same process) and uses the
 same `store`/`remote`/`jobs` layers, so a web action and the equivalent chat action behave identically.

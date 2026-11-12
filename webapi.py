@@ -28,6 +28,7 @@ The source link and developer credit (REPO_URL, DEV_ID, DEV_CHANNEL) are served 
 keep pointing at the project - please leave them in place.
 """
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -40,11 +41,12 @@ import shlex
 import shutil
 import tempfile
 import time
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 import store
 import subscriptions
 import hosting
+import payments
 from perf import describe as describe_perf
 from remote import Counting, Remote, fingerprint, load_pkey
 from util import clean_name, clean_path, env_int, human
@@ -667,12 +669,67 @@ async def h_plans(user, data):
 
 
 async def h_plan_order(user, data):
-    """Open an order for a plan (the Buy button)."""
+    """Open an order for a plan (the Buy button) and list the ways the owner takes payments."""
     p = subscriptions.plan((data.get("plan") or "").strip())
     if not p or p.free:
         raise ApiError("pick a paid plan")
     o, _fresh = subscriptions.order_create(user["id"], p)
-    return {"order": _order_json(o), "payment_info": subscriptions.payment_info(p)}
+    return {"order": _order_json(o), "payment_info": subscriptions.payment_info(p),
+            "methods": payments.methods(p)}
+
+
+async def h_plan_pay(user, data):
+    """Start one payment on a chosen gateway: the Mini App's pay buttons."""
+    oid = int_arg(data, "id")
+    o = store.order_get(oid) if oid else None
+    if not o or o["uid"] != user["id"]:
+        raise ApiError("that order is not yours", 404)
+    if o["status"] not in ("pending", "awaiting"):
+        raise ApiError(f"order #{oid} is already {o['status']}")
+    p = subscriptions.plan(o["plan"])
+    if not p:
+        raise ApiError("unknown plan", 404)
+    key = (data.get("method") or "").strip()
+    try:
+        r = await asyncio.to_thread(payments.start, o["id"], p, key,
+                                    (user.get("first_name") or "")[:32], subscriptions.CURRENCY)
+    except Exception as e:
+        raise ApiError(f"gateway: {e}")
+    out = {"mode": r["mode"], "auto": r["auto"], "text": r["text"]}
+    if r.get("qr"):
+        out["qr"] = "data:image/png;base64," + base64.b64encode(r["qr"]).decode()
+    for k in ("checkout_url", "intent", "vpa", "address", "amount", "coin", "uri"):
+        if r.get(k):
+            out[k] = r[k]
+    return {"payment": out, "order": _order_json(store.order_get(o["id"]))}
+
+
+async def h_plan_status(user, data):
+    """The payment screen polls this: the order state, and - for YouPI checkouts - the live
+    gateway status (a missed webhook still self-heals the activation here)."""
+    import bot
+    oid = int_arg(data, "id")
+    o = store.order_get(oid) if oid else None
+    if not o or o["uid"] != user["id"]:
+        raise ApiError("that order is not yours", 404)
+    m = payments.meta_get(oid) or {}
+    live = None
+    if m.get("provider") == "youpi":
+        try:
+            live = await asyncio.to_thread(payments.youpi_status, oid)
+        except Exception:
+            live = None
+        if live and live.get("status") == "SUCCESS" and o["status"] in ("pending", "awaiting"):
+            try:
+                await bot.gateway_paid(oid, "youpi", str(m.get("youpi_pid") or ""))  # the webhook never landed
+            except Exception:
+                pass
+    recv = m.get("recv") or {}
+    o = store.order_get(oid)
+    return {"order": _order_json(o), "provider": m.get("provider") or "",
+            "youpi": live,
+            "received": round(sum(e["v"] for e in recv.values() if not e.get("pending")), 12),
+            "expected": m.get("expected") or ""}
 
 
 async def h_plan_paid(user, data):
@@ -813,7 +870,8 @@ ROUTES = {
     "term": h_term, "stats": h_stats, "view": h_view, "send": h_send, "fetch": h_fetch,
     "up/init": h_up_init, "up/chunk": h_up_chunk, "up/status": h_up_status, "up/finish": h_up_finish,
     "jobs": h_jobs, "jobs/action": h_jobs_action, "audit": h_audit,
-    "plans": h_plans, "plans/order": h_plan_order, "plans/paid": h_plan_paid, "vps": h_vps,
+    "plans": h_plans, "plans/order": h_plan_order, "plans/paid": h_plan_paid,
+    "plans/pay": h_plan_pay, "plans/order_status": h_plan_status, "vps": h_vps,
     "admin/overview": h_admin_overview, "admin/users": h_admin_users, "admin/user": h_admin_user,
     "admin/ban": h_admin_ban, "admin/broadcast": h_admin_broadcast,
     "admin/orders": h_admin_orders, "admin/order": h_admin_order,
@@ -882,12 +940,64 @@ async def api_response(headers, body):
         return jdump({"error": f"{type(e).__name__}: {e}"}, 500)
 
 
+# ---------------------------------------------------------------- payment gateway webhooks
+async def youpi_webhook(headers, body):
+    """YouPI-PG posts signed payment events here: SUCCESS auto-activates the order."""
+    ev, error = payments.youpi_callback(body, headers.get("x-gateway-signature", ""))
+    if error:
+        log.warning("YouPI webhook rejected: %s", error)
+        return _raw_response(403, b'{"error": "bad signature or payload"}')
+    import bot
+    if ev.get("action") == "paid":
+        await bot.gateway_paid(ev["oid"], "youpi", ev.get("ref") or "")
+    elif ev.get("action") == "closed":
+        await bot.gateway_note(ev["oid"], f"\u23f3 Order #{ev['oid']} checkout {ev.get('event', '?').lower()} - "
+                                          "nothing was charged. /plans to try again (the order stays open).")
+    elif ev.get("action") == "mismatch":
+        o = store.order_get(ev["oid"]) or {}
+        store.log(o.get("uid", 0), "payments", f"order #{ev['oid']}: YouPI amount mismatch "
+                                                f"({ev.get('paise')} paise vs {o.get('cents')})")
+        try:
+            await bot.notify_admins(f"\u26a0\ufe0f Order #{ev['oid']}: YouPI reported {ev.get('paise')} paise "
+                                    f"but the order is {o.get('cents')} - check it by hand.")
+        except Exception:
+            pass
+    return _raw_response(200, b'{"ok": true}')
+
+
+async def cryptapi_webhook(target, headers):
+    """CryptAPI delivers signed GET callbacks; every valid one must get the literal body '*ok*'."""
+    params = dict(parse_qsl(target.partition("?")[2], keep_blank_values=True))
+    ev, error = payments.cryptapi_callback(params, target, headers.get("x-ca-signature", ""))
+    if error:
+        log.warning("CryptAPI callback rejected: %s", error)
+        return _raw_response(403, b"forbidden", "text/plain; charset=utf-8")
+    import bot
+    action = ev.get("action")
+    if action == "paid":
+        await bot.gateway_paid(ev["oid"], "crypto", ev.get("ref") or "")
+    elif action == "seen":
+        await bot.gateway_note(ev["oid"], f"\U0001f440 Payment seen on-chain ({ev.get('tx', '')[:24]}\u2026) - "
+                                          "waiting for confirmations; I'll message you when it clears.")
+    elif action == "short":
+        await bot.gateway_note(ev["oid"], f"\u23f3 Received {ev.get('confirmed')} of {ev.get('expected')} so far - "
+                                          "send the rest to the same address, it all counts.")
+    return _raw_response(200, b"*ok*", "text/plain; charset=utf-8")
+
+
+def _raw_response(status, body, ctype="application/json"):
+    return (f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
+            "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+            "Cache-Control: no-store\r\nConnection: close\r\n\r\n").encode() + body
+
+
 async def handle(reader, writer):
     try:
         parts = (await asyncio.wait_for(reader.readline(), 15)).decode(errors="replace").split()
         if len(parts) < 2:
             raise ValueError("bad request line")
         method, path = parts[0].upper(), parts[1].split("?")[0]
+        target = parts[1]
         headers = {"__path": path}
         while True:
             h = await asyncio.wait_for(reader.readline(), 15)
@@ -896,19 +1006,25 @@ async def handle(reader, writer):
             k, _, v = h.decode(errors="replace").partition(":")
             headers[k.strip().lower()] = v.strip()
         clen = int(headers.get("content-length", "0") or "0")
-        known = path == "/app" or path.startswith("/static/") or path.startswith("/api/")
-        if not known:  # /health, /healthz and anything else: the same answer the one-line server gave
-            writer.write(jdump({"status": "ok"}))
-        elif path == "/app":
-            writer.write(static_response("index.html"))
-        elif path.startswith("/static/"):
-            writer.write(static_response(path[len("/static/"):]))
-        elif path.startswith("/api/") and method != "POST":
-            writer.write(jdump({"error": "POST only"}, 405))
+        if path == "/pay/youpi/cb" and method == "POST":  # signed gateway webhooks: no Telegram auth
+            body = await read_body(reader, clen, MAX_JSON) if clen else b""
+            writer.write(await youpi_webhook(headers, body))
+        elif path == "/pay/cryptapi/cb" and method in ("GET", "POST"):
+            writer.write(await cryptapi_webhook(target, headers))
         else:
-            cap = (CHUNK + 65536) if path == "/api/up/chunk" else MAX_JSON
-            body = await read_body(reader, clen, cap) if clen else b""
-            writer.write(await api_response(headers, body))
+            known = path == "/app" or path.startswith("/static/") or path.startswith("/api/")
+            if not known:  # /health, /healthz and anything else: the same answer the one-line server gave
+                writer.write(jdump({"status": "ok"}))
+            elif path == "/app":
+                writer.write(static_response("index.html"))
+            elif path.startswith("/static/"):
+                writer.write(static_response(path[len("/static/"):]))
+            elif path.startswith("/api/") and method != "POST":
+                writer.write(jdump({"error": "POST only"}, 405))
+            else:
+                cap = (CHUNK + 65536) if path == "/api/up/chunk" else MAX_JSON
+                body = await read_body(reader, clen, cap) if clen else b""
+                writer.write(await api_response(headers, body))
         await writer.drain()
     except Exception:
         pass  # a half request (health prober) or a dropped socket: nothing to do

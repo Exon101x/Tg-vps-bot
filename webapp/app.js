@@ -211,6 +211,7 @@ function applyCredit(credit) {
 function showTab(name) {
   state.tab = name;
   haptic("select");
+  stopPayPoll();  // leaving the hosting tab stops watching the open payment
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   $("#v-" + name).classList.add("active");
   document.querySelectorAll("nav#tabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
@@ -706,6 +707,8 @@ function renderPlans(d) {
   });
 }
 
+let PAY_POLL = null, PAY_OID = 0;  // the open payment screen: what order, and its poll timer
+
 async function buyPlan(p) {
   let r;
   try { r = await api("plans/order", { plan: p.key }); }
@@ -715,7 +718,89 @@ async function buyPlan(p) {
   $("#pay-title").textContent = "Order #" + r.order.id + " \u00b7 " + r.order.name + " \u00b7 " + r.order.price + " " + r.order.currency;
   $("#pay-info").textContent = r.payment_info;
   $("#pay-ref").value = "";
+  const live = $("#pay-live"), meth = $("#pay-methods");
+  live.classList.add("hidden");
+  live.innerHTML = "";
+  meth.innerHTML = "";
+  stopPayPoll();
+  PAY_OID = r.order.id;
+  (r.methods || []).forEach((m) => {
+    const b = el("button", "btn", m.label);
+    b.onclick = () => startPayment(m.key);
+    meth.appendChild(b);
+  });
   box.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function copyChip(label, value) {
+  const c = el("div", "row");
+  const mid = el("div", "grow");
+  mid.appendChild(el("div", "sub2", label));
+  const v = el("div", "mono", value);
+  v.style.wordBreak = "break-all";
+  mid.appendChild(v);
+  const b = el("button", "btn small", "copy");
+  b.onclick = () => navigator.clipboard.writeText(value).then(() => toast("copied"), () => {});
+  c.appendChild(mid); c.appendChild(b);
+  return c;
+}
+
+async function startPayment(key) {
+  let r;
+  try { r = await api("plans/pay", { id: PAY_OID, method: key }); }
+  catch (e) { return toast(e.message, true); }
+  const p = r.payment, live = $("#pay-live");
+  $("#pay-methods").innerHTML = "";
+  live.classList.remove("hidden");
+  live.innerHTML = "";
+  const w = el("div", "pay-live");
+  if (p.qr) {
+    const img = el("img", "pay-qr");
+    img.src = p.qr; img.alt = "payment QR";
+    w.appendChild(img);
+  }
+  w.appendChild(el("div", "dim", p.text));
+  if (p.checkout_url) {
+    const b = el("button", "btn primary", "\U0001f4b3 Open the checkout page");
+    b.onclick = () => (window.Telegram?.WebApp?.openLink ? Telegram.WebApp.openLink(p.checkout_url) : window.open(p.checkout_url, "_blank"));
+    w.appendChild(b);
+  }
+  if (p.intent) {
+    const b = el("button", "btn primary", "\U0001f4f2 Open the UPI app");
+    b.onclick = () => (window.Telegram?.WebApp?.openLink ? Telegram.WebApp.openLink(p.intent) : (location.href = p.intent));
+    w.appendChild(b);
+  }
+  if (p.address) w.appendChild(copyChip("Address (" + (p.coin || "").replace("/", " ") + ")", p.address));
+  if (p.amount) w.appendChild(copyChip("Amount (send exactly)", p.amount + (p.mode === "crypto" ? "" : " INR")));
+  if (p.vpa) w.appendChild(copyChip("UPI id", p.vpa));
+  if (p.auto) {
+    w.appendChild(el("div", "sub2", "\u23f3 watching the payment \u00b7 it activates on its own"));
+    startPayPoll();
+  }
+  live.appendChild(w);
+  live.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function startPayPoll() {
+  stopPayPoll();
+  PAY_POLL = setInterval(async () => {
+    let r;
+    try { r = await api("plans/order_status", { id: PAY_OID }); }
+    catch (e) { return; }  // a poll failing (offline for a moment) is not fatal
+    if (r.order.status === "approved") {
+      stopPayPoll();
+      toast("\u2705 paid \u2014 " + r.order.name + " is active");
+      $("#pay-box").classList.add("hidden");
+      loadHosting();
+    } else if (r.received && r.expected && r.received > 0) {
+      const seen = $("#pay-live .sub2:last-child");
+      if (seen) seen.textContent = "\u23f3 received " + r.received + " of " + r.expected + " \u00b7 waiting for confirmations";
+    }
+  }, 5000);
+}
+
+function stopPayPoll() {
+  if (PAY_POLL) { clearInterval(PAY_POLL); PAY_POLL = null; }
 }
 
 $("#pay-send").onclick = async () => {

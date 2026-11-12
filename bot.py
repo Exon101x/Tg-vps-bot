@@ -40,6 +40,7 @@ import session_sync
 import store
 import subscriptions
 import hosting
+import payments
 import webapi
 from jobs import Engine, is_permanent
 from largefiles import choose_volume, join_script, order_volumes, plan_volumes, volume_name
@@ -172,6 +173,10 @@ PLANS & VPS HOSTING (buy your own VPS - host your own bots on it)
 /mysub - your plan, limits and expiry · /myvps - your VPS instances
 /paid <reference> - confirm a payment (the UPI/PayPal/crypto reference)
 /hosting - the 60-second guide: your bot, running on your VPS, tonight
+UPI (checkout page, QR, any UPI app) and crypto (BTC, USDT, 100+ coins) are accepted
+when the owner set up the gateways: the Buy button takes real payments and the plan
+activates the second the money lands - no waiting, no /paid needed. Otherwise the
+reference flow above still works.
 VPS plans include SSH instances with a disk quota - buy, get credentials in
 seconds, add the VPS back as a server (/add myvps ssh://user@host) and manage
 it right from this chat (files, shell, services, the Mini App console).
@@ -887,6 +892,12 @@ async def approve_order(oid, admin_uid, approve):
         except Exception:
             pass
         return o, None
+    await _fulfill(o, p)
+    return o, None
+
+
+async def _fulfill(o, p):
+    """Activate a just-approved order: start the plan, extend/provision VPS instances, deliver."""
     expires = subscriptions.activate(o["uid"], p)
     until = time.strftime("%Y-%m-%d", time.gmtime(expires))
     notes, creds = [], []
@@ -914,7 +925,35 @@ async def approve_order(oid, admin_uid, approve):
         await app.send_message(o["uid"], "\n".join(text))
     except Exception:
         pass
+
+
+async def gateway_paid(oid, provider, ref):
+    """A payment gateway webhook (UPI YouPI / CryptAPI crypto) confirmed the money: activate
+    instantly. Idempotent - replays and retries can never activate twice."""
+    o, error = subscriptions.order_gateway_paid(oid, provider, ref)
+    if not o or error:
+        return o, error
+    p = subscriptions.plan(o["plan"])
+    if not p or p.free:
+        return o, "unknown plan"
+    await _fulfill(o, p)
+    try:
+        await notify_admins(f"✅ Order #{oid} ({p.name}) paid via {provider} - ref {ref[:32] or 'n/a'}. "
+                            "Activated automatically, no action needed.")
+    except Exception:
+        pass
     return o, None
+
+
+async def gateway_note(oid, text):
+    """One-off buyer notifications from the webhook pipeline (payment seen, short, expired...)."""
+    o = store.order_get(oid)
+    if not o:
+        return
+    try:
+        await app.send_message(o["uid"], text)
+    except Exception:
+        pass
 
 
 @app.on_message(auth & filters.command(["plans", "pricing"]))
@@ -1840,6 +1879,102 @@ async def on_callback(_, cq):
             return await do_reboot(msg, uid)
         if arg in VIEWS:
             return await do_view(msg, uid, arg)
+    if kind == "buy":  # a /plans button: open an order and choose how to pay
+        p = subscriptions.plan(arg)
+        if not p or p.free:
+            return await cq.answer("Pick a paid plan - /plans", show_alert=True)
+        o, _fresh = subscriptions.order_create(uid, p)
+        opts = payments.methods(p)
+        if not opts:  # no gateway configured: the assisted flow with PAYMENT_INFO
+            await cq.answer()
+            return await msg.edit_text(order_text(o, p))
+        rows = [[Btn(m["label"], callback_data=f"pay:{o['id']}:{m['key']}")] for m in opts]
+        rows.append([Btn("🧾 Paid another way? Send the reference", callback_data="pl:ref")])
+        await cq.answer()
+        return await msg.edit_text(f"🧾 Order #{o['id']} · {p.name} · {p.price:g} {CURRENCY} / {p.days}d\n\n"
+                                   "How do you want to pay?", reply_markup=InlineKeyboardMarkup(rows))
+    if kind == "pay":  # pay:<oid>:<method> - start the payment on the chosen gateway
+        oid_s, _, mkey = arg.partition(":")
+        try:
+            o = store.order_get(int(oid_s))
+        except ValueError:
+            o = None
+        if not o or o["uid"] != uid:
+            return await cq.answer("That order is not yours - /plans", show_alert=True)
+        if o["status"] not in ("pending", "awaiting"):
+            return await cq.answer(f"Order #{o['id']} is {o['status']}.", show_alert=True)
+        p = subscriptions.plan(o["plan"])
+        if not p:
+            return await cq.answer("Unknown plan", show_alert=True)
+        await cq.answer("Creating the payment…")
+        try:
+            r = await asyncio.to_thread(payments.start, o["id"], p, mkey,
+                                        (cq.from_user.first_name or "")[:32], CURRENCY)
+        except Exception as e:
+            return await msg.reply(f"❌ {e}\nPick another way to pay: /plans")
+        if r["mode"] == "youpi":
+            try:
+                await msg.edit_text(f"🧾 Order #{o['id']} · {p.name} · {p.price:g} {CURRENCY}\n\n"
+                                    "💳 Pay on the checkout page (QR code + any UPI app). It confirms here "
+                                    "automatically - no /paid needed.\n⏳ The checkout window is short: pay right "
+                                    "after you open it.", reply_markup=InlineKeyboardMarkup(
+                                        [[Btn("💳 Open the checkout page", url=r["checkout_url"])]]))
+            except Exception:
+                pass
+        elif r["mode"] == "upi":
+            await msg.reply_photo(r["qr"], caption=f"🧾 Order #{o['id']} · {p.name} · {r['amount']} INR\n\n"
+                                 f"Payee: {r['vpa']}\nScan, or tap the button below, pay in any UPI app,\n"
+                                 "then send /paid <UTR reference> - the owner confirms it.")
+            try:
+                await msg.edit_reply_markup()
+            except Exception:
+                pass
+            await msg.reply("📲 One-tap:", reply_markup=InlineKeyboardMarkup(
+                [[Btn("Open the UPI app", url=r["intent"])]]))
+        else:  # crypto
+            coin_label = r["coin"].replace("/", " ").upper()
+            await msg.reply_photo(r["qr"], caption=f"🧾 Order #{o['id']} · {p.name}\n\n{coin_label}\n"
+                                 f"Address: {r['address']}\nAmount: {r['amount']} (exact)\n\n"
+                                 "It confirms on-chain automatically - I'll message you when it clears. "
+                                 "Partial payments count: send the rest to the same address.")
+            try:
+                await msg.edit_reply_markup()
+            except Exception:
+                pass
+        return
+    if kind == "pl":  # the plans / hosting buttons on several screens
+        await cq.answer()
+        if arg == "plans":
+            return await msg.reply(plans_text(uid), reply_markup=plans_kb())
+        if arg == "sub":
+            return await msg.reply(mysub_text(uid), reply_markup=InlineKeyboardMarkup(
+                [[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]]))
+        if arg == "vps":
+            return await msg.reply(myvps_text(uid))
+        if arg == "host":
+            return await msg.reply(HOSTING_GUIDE, reply_markup=InlineKeyboardMarkup(
+                [[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]]))
+        if arg == "ref":
+            return await msg.reply("Send /paid <transaction reference> right here (the UTR from your UPI "
+                                   "app or the crypto tx id) - the owner approves it.")
+        return
+    if kind == "ord":  # the order decision buttons (from /paid or the panel)
+        if uid not in ADMINS:
+            return await cq.answer("Admins only.", show_alert=True)
+        oid_s, _, act = arg.rpartition(":")
+        try:
+            oid = int(oid_s)
+        except ValueError:
+            return await cq.answer("Bad button", show_alert=True)
+        o, error = await approve_order(oid, uid, act == "a")
+        if error:
+            return await cq.answer(error, show_alert=True)
+        await cq.answer("✅ Approved - the buyer got everything." if act == "a" else "Declined.")
+        try:
+            await msg.edit_reply_markup()
+        except Exception:
+            pass
+        return
     if kind == "adm" and uid in ADMINS:  # the /admin panel's buttons
         await cq.answer()
         if arg == "overview":
@@ -1896,6 +2031,8 @@ COMMANDS = [
     ("servers", "Saved servers"), ("add", "Add a server"), ("monitor", "Alerts on/off"),
     ("ask", "Pick the server per file"), ("audit", "Action log"), ("about", "Bot status"), ("help", "All commands"),
     ("app", "Web UI for servers, files and console"), ("admin", "Admin panel (admins)"),
+    ("plans", "Plans: more servers, your own VPS"), ("mysub", "Your plan and expiry"),
+    ("myvps", "Your VPS instances"), ("paid", "Confirm a payment"), ("hosting", "Host your bot - the guide"),
 ]
 
 

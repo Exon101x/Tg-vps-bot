@@ -221,6 +221,22 @@ def order_decide(oid, approve, admin_uid):
     return store.order_get(oid), p, None
 
 
+def order_gateway_paid(oid, provider, ref):
+    """A payment gateway (UPI/crypto webhook) verified the money arrived: approve the order.
+    Idempotent - a replayed webhook returns ('already', None) without activating twice.
+    Returns (order, error): error is None on the first approval."""
+    o = store.order_get(oid)
+    if not o:
+        return None, "no such order"
+    if o["status"] == "approved":
+        return o, "already"
+    if o["status"] not in ("pending", "awaiting"):
+        return o, f"order #{oid} is {o['status']}"
+    store.order_set(oid, ref=(ref or "")[:128], status="approved", decided=int(time.time()))
+    store.log(o["uid"], provider[:24] or "gateway", f"order #{oid} paid via {provider} (auto)")
+    return store.order_get(oid), None
+
+
 # ---------------------------------------------------------------- admin stats
 def stats():
     counts, (approved, cents) = store.order_stats()

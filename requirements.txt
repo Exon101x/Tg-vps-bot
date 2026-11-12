@@ -13,3 +13,6 @@ psycopg2-binary==2.9.13   # PostgreSQL
 pymysql==1.2.4            # MySQL / MariaDB
 pymongo==4.19.0; python_version >= "3.11"   # MongoDB / Atlas
 pymongo==4.18.0; python_version < "3.11"
+# payment QR codes (UPI intent + crypto addresses): pure-python PNG output, no Pillow needed
+qrcode==8.2
+pypng==0.20220715.0

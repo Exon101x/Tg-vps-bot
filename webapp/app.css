@@ -597,4 +597,16 @@ footer#foot {
 .cred .ibtn { font-size: 11px; padding: 4px 10px; }
 #pay-box { margin: 12px 0 16px; }
 #pay-box .dim { line-height: 1.5; margin-bottom: 10px; white-space: pre-line; }
+#pay-methods { display: grid; gap: 8px; margin: 4px 0 10px; }
+#pay-methods .btn { text-align: left; justify-content: flex-start; }
+#pay-live { margin-bottom: 10px; }
+.pay-live { display: grid; gap: 9px; justify-items: stretch; animation: viewin .35s var(--ease); }
+.pay-qr {
+  width: 208px; height: 208px; justify-self: center; border-radius: 14px; padding: 10px;
+  background: #fff; box-shadow: var(--shadow); image-rendering: pixelated;
+}
+.pay-live .mono { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+.pay-live .row { align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px 11px; }
+.pay-live .row .btn { flex: none; }
+.btn.small { padding: 5px 11px; font-size: 11.5px; }
 @media (max-width: 379px) { .plans { grid-template-columns: 1fr; } }
