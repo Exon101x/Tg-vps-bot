@@ -1,6 +1,6 @@
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-import http.server, importlib, random, tempfile, threading, types
+import asyncio, http.server, importlib, random, tempfile, threading, types
 from cryptography.fernet import Fernet
 os.environ.update(SECRET_KEY=Fernet.generate_key().decode(), DATABASE_URL="sqlite:///" + os.path.join(tempfile.mkdtemp(), "m.db"),
                   API_ID="1", API_HASH="x", BOT_TOKEN="1:x", ALLOWED_USERS="5", SESSION_DIR=tempfile.mkdtemp())
@@ -53,4 +53,40 @@ t = bot.parse_target("ftps://bob:p%40ss@h.example/up"); ok(t["secret"] == "p@ss"
 ok(bot.parse_target("sftp://u@h")["scheme"] == "ssh", "sftp:// is an alias for ssh")
 for cmd, danger in [("ls -la", False), ("rm -rf /tmp/x", True), ("cat /etc/passwd", False), ("sudo passwd bob", True), ("systemctl restart nginx", False), ("docker ps", False), ("reboot", True), ("dd if=/dev/zero of=/dev/sda", True)]:
     ok(bool(bot.DANGEROUS.search(cmd)) == danger, f"confirm-guard: {cmd!r} -> {danger}")
+
+# ---------------------------------------------------------------- long texts vs Telegram's 4096-unit cap
+ok(bot.tlen("a") == 1 and bot.tlen("\U0001f5a5") == 2 and bot.tlen("a\U0001f5a5") == 3,
+   "tlen counts UTF-16 units (an emoji costs 2)")
+ok(bot.split_text("hello") == ["hello"], "a short text is one chunk, untouched")
+big = "\n".join(f"line {i} of the manual - pack it with a few words" for i in range(200))
+ch = bot.split_text(big)
+ok(all(bot.tlen(c) <= 4000 for c in ch) and "\n".join(ch).split() == big.split(),
+   f"a {bot.tlen(big)}-unit text splits into {len(ch)} chunks, every word preserved")
+ok(all(c.startswith("line ") for c in ch), "chunks break at line boundaries")
+e = "\U0001f5a5" * 3000  # 6000 UTF-16 units of pure emoji
+ch = bot.split_text(e)
+ok(all(bot.tlen(c) <= 4000 for c in ch) and "".join(ch) == e, "emoji-dense text: no emoji cut in half, nothing lost")
+one = "x" * 9000
+ch = bot.split_text(one)
+ok(all(bot.tlen(c) <= 4000 for c in ch) and "".join(ch) == one, "a single 9000-char line is hard-cut, nothing lost")
+ok(all(bot.tlen(c) <= 4096 for c in bot.split_text(bot.HELP)),
+   f"HELP ({bot.tlen(bot.HELP)} UTF-16 units) fits Telegram after splitting - /start used to crash on it")
+ok("\n".join(bot.split_text(bot.HELP)).split() == bot.HELP.split(), "HELP splits without losing a word")
+
+class FakeChat:
+    def __init__(self): self.follow = []
+    async def send_message(self, text): self.follow.append(text)
+class FakeMsg:
+    def __init__(self): self.chat, self.replies, self.kwargs = FakeChat(), [], []
+    async def reply(self, text, **kw): self.replies.append(text); self.kwargs.append(kw)
+fm = FakeMsg()
+parts_big = bot.split_text(big)
+asyncio.run(bot.reply_long(fm, big, reply_markup="KB"))
+ok(len(fm.replies) == 1 and len(fm.chat.follow) == len(parts_big) - 1 and fm.kwargs[0].get("reply_markup") == "KB"
+   and fm.replies[0] == parts_big[0] and fm.chat.follow[0] == parts_big[1],
+   "reply_long: first chunk replies (with the keyboard), the rest follow into the chat in order")
+fm = FakeMsg()
+asyncio.run(bot.reply_long(fm, "hi"))
+ok(fm.replies == ["hi"] and not fm.chat.follow, "reply_long: a short text is a single reply")
+
 print("ALL MISC PASSED")

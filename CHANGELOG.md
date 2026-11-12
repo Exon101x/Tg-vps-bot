@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.8.3 — /start crashed: any text over Telegram's message cap now splits safely
+
+* **Fixed the `MESSAGE_TOO_LONG` crash on `/start`** (reported live from a fresh VPS
+  deploy): `HELP` had grown to 4101 UTF-16 code units — over Telegram's hard cap of
+  4096 (which counts UTF-16 units, so emojis cost 2) — and one long feature batch
+  pushed it over. New `split_text`/`tlen`/`reply_long` in `bot.py`: any reply routed
+  through `reply_long` arrives as consecutive messages, each safely under the cap,
+  cut at line boundaries where possible, never splitting an emoji or dropping a word.
+* **Every growable text now goes through it**: `/start`/`/help` (HELP), `/plans`
+  (custom `SUBSCRIPTION_PLANS` catalogs can be arbitrarily long), `/mysub`, `/myvps`,
+  the `pl:` plan screens and the hosting guide, and the admin panel (`/admin`
+  overview, the 100-user list, orders) — the keyboard rides the first chunk, the
+  rest follow into the chat. `/sh`-style command output keeps its existing
+  document-fallback path.
+* **Correct manual deployment steps**: the README's "Option B" told you to run
+  `pip install -r requirements.txt` straight — on current Ubuntu/Debian the system
+  pip is locked (PEP 668, externally managed) and refuses. The steps now create a
+  venv first (`sudo apt install python3-venv`, `python3 -m venv myenv`),
+  matching what a fresh VPS actually needs.
+* **Tests**: `tests/check_misc.py` grows 11 checks — UTF-16 counting (emoji = 2
+  units), line-boundary splitting with no word lost, no emoji cut in half,
+  9000-char single-line hard cuts, the real formatted HELP splitting under the cap,
+  and `reply_long` chunk ordering with a fake chat (first chunk carries the
+  keyboard, the rest follow).
+
 ## 1.8.2 — gateway setup tool: one command, every gateway
 
 * **`setup_gateway.py`** — the full payment-gateway setup, one stdlib-only command next to

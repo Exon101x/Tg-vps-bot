@@ -102,9 +102,12 @@ existing `SECRET_KEY` and never runs anything without confirmation.
 ### Option B — manual
 
 ```bash
+sudo apt install -y python3-venv          # Ubuntu / Debian; Python 3.10+ required
+python3 -m venv myenv                     # modern distros lock the system pip (PEP 668) - use a venv
+source myenv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env        # fill in API_ID, API_HASH, BOT_TOKEN, SECRET_KEY, ALLOWED_USERS
-python bot.py
+python bot.py               # or: python deploy.py --target systemd --run (service, autorestart)
 ```
 
 ### First steps in Telegram

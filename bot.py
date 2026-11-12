@@ -292,6 +292,48 @@ def lines_arg(s, default=50):
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
+def tlen(s):
+    """How long Telegram thinks s is: the message cap counts UTF-16 code units - an
+    emoji (astral char) costs 2. len(s) undercounts emoji-heavy texts."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+MAX_TEXT = 4000  # Telegram's hard cap is 4096 units per message; keep headroom
+
+
+def split_text(text, limit=MAX_TEXT):
+    """Split any text into chunks that each fit one Telegram message, breaking at line
+    boundaries when possible (a single line longer than the limit is hard-cut)."""
+    out, start = [], 0
+    while start < len(text):
+        units, hard = 0, start
+        for i in range(start, len(text)):  # how far can this chunk reach?
+            units += 2 if ord(text[i]) > 0xFFFF else 1
+            if units > limit:
+                break
+            hard = i + 1
+        if hard >= len(text):
+            out.append(text[start:])
+            break
+        cut = text.rfind("\n", start, hard)  # prefer to break at a line boundary
+        if cut <= start:
+            cut = hard
+        out.append(text[start:cut].rstrip("\n"))
+        start = cut
+        while start < len(text) and text[start] == "\n":
+            start += 1
+    return out
+
+
+async def reply_long(msg, text, **kw):
+    """Reply with any text, however long: chunks go out as consecutive messages (the
+    keyboard, if any, rides the first). Without this, any text past Telegram's 4096-unit
+    cap crashes the handler with MESSAGE_TOO_LONG - /start grew into exactly that."""
+    parts = split_text(text)
+    for i, part in enumerate(parts):
+        await (msg.reply(part, **kw) if not i else msg.chat.send_message(part))
+
+
 async def send_output(msg, text, title=""):
     text = ANSI.sub("", text).strip() or "(no output)"
     if len(text) <= 3400:
@@ -591,7 +633,7 @@ async def gate(_, m):
 @app.on_message(auth & filters.command(["start", "help"]))
 async def start(_, m):
     store.touch_user(m.from_user.id, m.from_user.first_name or "", m.from_user.username or "")
-    await m.reply(HELP)
+    await reply_long(m, HELP)
 
 
 @app.on_message(auth & filters.command("app"))
@@ -958,20 +1000,20 @@ async def gateway_note(oid, text):
 
 @app.on_message(auth & filters.command(["plans", "pricing"]))
 async def plans_cmd(_, m):
-    await m.reply(plans_text(m.from_user.id), reply_markup=plans_kb())
+    await reply_long(m, plans_text(m.from_user.id), reply_markup=plans_kb())
 
 
 @app.on_message(auth & filters.command(["mysub", "mysubscription"]))
 async def mysub_cmd(_, m):
     kb = InlineKeyboardMarkup([[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]])
-    await m.reply(mysub_text(m.from_user.id), reply_markup=kb)
+    await reply_long(m, mysub_text(m.from_user.id), reply_markup=kb)
 
 
 @app.on_message(auth & filters.command("myvps"))
 async def myvps_cmd(_, m):
     kb = InlineKeyboardMarkup([[Btn("💎 Plans", callback_data="pl:plans")]]) \
         if not store.alloc_list(m.from_user.id) else None
-    await m.reply(myvps_text(m.from_user.id), reply_markup=kb)
+    await reply_long(m, myvps_text(m.from_user.id), reply_markup=kb)
 
 
 @app.on_message(auth & filters.command("paid"))
@@ -1143,13 +1185,13 @@ async def admin_cmd(_, m):
         kb = InlineKeyboardMarkup([[Btn("📊 Refresh", callback_data="adm:overview")],
                                    [Btn("👥 Users", callback_data="adm:users")],
                                    [Btn("🧾 Orders", callback_data="adm:orders")]])
-        return await m.reply(admin_overview_text(), reply_markup=kb)
+        return await reply_long(m, admin_overview_text(), reply_markup=kb)
     if head == "overview":
-        return await m.reply(admin_overview_text())
+        return await reply_long(m, admin_overview_text())
     if head == "users":
-        return await m.reply(admin_users_text())
+        return await reply_long(m, admin_users_text())
     if head == "orders":
-        return await m.reply(admin_orders_text(), reply_markup=admin_orders_kb())
+        return await reply_long(m, admin_orders_text(), reply_markup=admin_orders_kb())
     if head == "user" and rest.strip().lstrip("-").isdigit():
         return await m.reply(admin_user_text(int(rest.strip())))
     if head in ("ban", "unban") and rest.strip().lstrip("-").isdigit():
@@ -1951,14 +1993,14 @@ async def on_callback(_, cq):
     if kind == "pl":  # the plans / hosting buttons on several screens
         await cq.answer()
         if arg == "plans":
-            return await msg.reply(plans_text(uid), reply_markup=plans_kb())
+            return await reply_long(msg, plans_text(uid), reply_markup=plans_kb())
         if arg == "sub":
-            return await msg.reply(mysub_text(uid), reply_markup=InlineKeyboardMarkup(
+            return await reply_long(msg, mysub_text(uid), reply_markup=InlineKeyboardMarkup(
                 [[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]]))
         if arg == "vps":
-            return await msg.reply(myvps_text(uid))
+            return await reply_long(msg, myvps_text(uid))
         if arg == "host":
-            return await msg.reply(HOSTING_GUIDE, reply_markup=InlineKeyboardMarkup(
+            return await reply_long(msg, HOSTING_GUIDE, reply_markup=InlineKeyboardMarkup(
                 [[Btn("💎 Plans", callback_data="pl:plans"), Btn("🚀 My VPS", callback_data="pl:vps")]]))
         if arg == "ref":
             return await msg.reply("Send /paid <transaction reference> right here (the UTR from your UPI "
@@ -1984,9 +2026,9 @@ async def on_callback(_, cq):
     if kind == "adm" and uid in ADMINS:  # the /admin panel's buttons
         await cq.answer()
         if arg == "overview":
-            return await msg.reply(admin_overview_text())
+            return await reply_long(msg, admin_overview_text())
         if arg == "users":
-            return await msg.reply(admin_users_text())
+            return await reply_long(msg, admin_users_text())
 
 
 # ---------------------------------------------------------------- monitoring
