@@ -334,4 +334,32 @@ ok('window.API_BASE' not in open(os.path.join(out, "index.html")).read()
 src_html = open(os.path.join(REPO, "webapp", "index.html")).read()
 ok('window.API_BASE' not in src_html,
    "19g. the webapp/ source stays untouched: only the build output carries the injected base")
+
+# Netlify's build machines (netlify.toml runs this script): a build that would ship an app
+# calling the static site instead of the bot must fail the deploy, with the fix in the message.
+def netlify_env(extra=None):
+    return dict(os.environ, NETLIFY="true", URL="https://bot-app.netlify.app", **(extra or {}))
+
+r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_webapp.py")],
+                   capture_output=True, text=True, timeout=60, env=netlify_env())
+ok(r.returncode != 0 and "BOT_API_URL" in r.stderr,
+   "19h. on Netlify a missing BOT_API_URL fails the build (never ship an app that calls the static site)")
+r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_webapp.py")],
+                   capture_output=True, text=True, timeout=60,
+                   env=netlify_env({"BOT_API_URL": "https://bot-app.netlify.app"}))
+ok(r.returncode != 0 and "BOT's" in r.stderr,
+   "19i. on Netlify a BOT_API_URL equal to the site's own address fails the build (it must be the bot's)")
+r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_webapp.py")],
+                   capture_output=True, text=True, timeout=60,
+                   env=netlify_env({"BOT_API_URL": "https://vps.example.com"}))
+ok(r.returncode == 0 and 'window.API_BASE="https://vps.example.com"' in open(os.path.join(out, "index.html")).read(),
+   "19j. on Netlify the bot's address in BOT_API_URL builds cleanly (env var, not an argument)")
+r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_webapp.py")],
+                   capture_output=True, text=True, timeout=60,
+                   env=dict(os.environ, BOT_API_URL="https://env-bot.example.com"))
+ok(r.returncode == 0 and 'window.API_BASE="https://env-bot.example.com"' in open(os.path.join(out, "index.html")).read(),
+   "19k. locally, BOT_API_URL works as the default base (argument still wins when given)")
+nt = open(os.path.join(REPO, "netlify.toml")).read()
+ok("scripts/build_webapp.py" in nt and "webapp-dist" in nt,
+   "19l. netlify.toml builds webapp-dist (a Git-connected Netlify site redeploys the app on every push)")
 print("ALL WEBAPP CHECKS PASSED")

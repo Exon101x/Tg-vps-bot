@@ -399,6 +399,13 @@ The Mini App is four static files (`webapp/`); nothing runs on the static host. 
 unchanged: every request carries Telegram's initData signature and the bot verifies it, whatever
 origin the app is opened from.
 
+> **The whole bot on Netlify (or Vercel/Cloudflare Functions) is not a thing.** The bot is a
+> long-running Pyrogram client that keeps a Telegram session open, a SQLite database on disk, SSH
+> streaming jobs that run for minutes, and timers (`hosting.sweep()`, staging cleanup).
+> Serverless functions are stateless request handlers with no persistent filesystem and
+> second-scale execution limits — the two are incompatible. The split here is the supported
+> shape: **static app on Netlify, bot on your VPS**.
+
 ### The three steps
 
 1. **Build the app for static hosting** (rewrites asset paths, injects the API base, adds
@@ -417,8 +424,20 @@ origin the app is opened from.
      *Upload assets*, drop the folder. You get `https://<name>.pages.dev` (or connect a custom
      domain). No build step, no config — the `_headers` and `_redirects` files in the folder are
      picked up automatically.
-   * **Netlify**: drag the folder onto https://app.netlify.com/drop, or
+   * **Netlify, drag and drop**: drag the folder onto https://app.netlify.com/drop, or
      `netlify deploy --dir webapp-dist`.
+   * **Netlify, connected to the repo** (redeploys on every push): the committed `netlify.toml`
+     builds `webapp-dist/` itself. In Netlify: **Add new site → Import an existing project →
+     GitHub → this repo**, then set one environment variable in *Site settings → Environment
+     variables*:
+
+     ```
+     BOT_API_URL = https://vps.example.com     # the bot's public HTTPS address (not the site's)
+     ```
+
+     The build fails with a clear message if `BOT_API_URL` is missing or points at the Netlify
+     site itself — you can't accidentally ship an app that calls the static host instead of
+     the bot.
    * **Vercel**: point a project's output directory at `webapp-dist/`.
    * **Another box of yours**: any nginx `root` with `try_files $uri /index.html;` works too —
      the README inside the build has the snippet.
@@ -426,8 +445,8 @@ origin the app is opened from.
 3. **Tell the bot where the app lives now**:
 
    ```bash
-   ALLOWED_ORIGINS=https://your-app.pages.dev   # the static host's address (comma list is fine)
-   WEBAPP_URL=https://your-app.pages.dev        # /app's button and the menu button point at the app
+   ALLOWED_ORIGINS=https://your-app.netlify.app  # the static host's address (comma list is fine)
+   WEBAPP_URL=https://your-app.netlify.app       # /app's button and the menu button point at the app
    ```
 
    `WEBAPP_URL` origins are always allowed, so the two usually hold the same value;

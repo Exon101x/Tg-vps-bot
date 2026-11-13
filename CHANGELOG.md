@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.9.1 — Netlify: one env var, deploy on every push
+
+* **`netlify.toml` in the repo**: a Netlify site connected to the GitHub repo now builds and
+  publishes `webapp-dist/` on every push — no local build, no drag and drop. Set
+  `BOT_API_URL` (the bot's public HTTPS address) once in Site settings → Environment
+  variables; that is the only site-level setting. The build script reads `BOT_API_URL` as
+  its default base locally too (the CLI argument still wins).
+* **A guard for the stateless trap**: on Netlify build machines a missing `BOT_API_URL` —
+  or one pointing at the Netlify site itself — fails the deploy with the fix in the
+  message, instead of shipping an app whose every API call hits the static host and dies
+  on the `/index.html` fallback. Local builds are unaffected.
+* Docs: DEPLOY.md spells out the Netlify flow (drag-and-drop and repo-connected) and why
+  the whole bot can't be serverless (long-running Pyrogram session, SQLite on disk,
+  minutes-long SSH jobs, timers). Tests 19h–19l cover the guard, the env-var default and
+  the `netlify.toml` contents.
+
 ## 1.9.0 — host the Mini App anywhere, keep the bot on your VPS
 
 * **Split hosting, natively supported.** The Mini App's four static files can now live on

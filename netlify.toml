@@ -1,0 +1,21 @@
+# Netlify config for the vpsbot Mini App (the static half of the split setup).
+#
+# The BOT cannot run on Netlify: it is a long-running Pyrogram client with a SQLite
+# database, SSH streaming jobs and timers - Netlify Functions are stateless request
+# handlers. Keep the bot on your VPS; this file deploys only its webapp.
+#
+# Once, in Site settings -> Environment variables:
+#   BOT_API_URL = https://your-vps.example.com     # the bot's public https address
+#
+# Then every push to main redeploys the app. On the bot's side set
+# ALLOWED_ORIGINS (and WEBAPP_URL) to the Netlify site address - see
+# DEPLOY.md, "Hosting the Mini App elsewhere".
+
+[build]
+  command = "python3 scripts/build_webapp.py"
+  publish = "webapp-dist"
+
+# python_version is read by Netlify's runtime; 3.12 is in the supported set
+# (the script itself is stdlib-only and runs on anything >= 3.8).
+[build.environment]
+  PYTHON_VERSION = "3.12"

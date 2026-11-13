@@ -1,4 +1,4 @@
-"""Build the deployable Mini App for static hosting (Cloudflare Pages, Netlify, Vercel, GitHub
+"""Build the deployable Mini App for static hosting (Netlify, Cloudflare Pages, Vercel, GitHub
 Pages, or your own nginx): rewrites webapp/ into webapp-dist/ with
 
   * root-relative asset paths (a static host serves from its root, not from /static/),
@@ -8,7 +8,12 @@ Pages, or your own nginx): rewrites webapp/ into webapp-dist/ with
 The bot serves the same app itself at /app; this build only exists for the split setup:
 
     python scripts/build_webapp.py https://vps.example.com
-    python scripts/build_webapp.py            # API_BASE from WEBAPP_URL, else same-origin
+    python scripts/build_webapp.py            # API_BASE from BOT_API_URL, else same-origin
+
+Netlify connected to the repo deploys this on every push: the committed netlify.toml runs the
+script, so set BOT_API_URL (the bot's public https address) in Site settings -> Environment
+variables first. On Netlify a same-origin build is always wrong (the origin there is the static
+site, not the bot) and fails the deploy with the fix in the message.
 
 Then point the static host's output directory at webapp-dist/, and on the bot set
 ALLOWED_ORIGINS to the host the app is served from (see DEPLOY.md, 'Hosting the Mini App
@@ -22,6 +27,22 @@ import sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 SRC = os.path.join(ROOT, "webapp")
 OUT = os.path.join(ROOT, "webapp-dist")
+
+
+def netlify_guard(api_base):
+    """On Netlify's build machines (NETLIFY=true) refuse builds that would ship an app calling
+    itself: with no base at all, or a base equal to the site's own address, every API request
+    would hit the static host and die on the /index.html fallback. Local builds are untouched."""
+    if os.getenv("NETLIFY") != "true":
+        return
+    site = (os.getenv("URL") or os.getenv("DEPLOY_PRIME_URL") or "").rstrip("/")
+    if not api_base:
+        sys.exit("same-origin build on Netlify: the app would call the static site, not the bot.\n"
+                 "Set BOT_API_URL to the bot's public https address (Site settings -> Environment\n"
+                 "variables), then redeploy.")
+    if api_base == site:
+        sys.exit(f"BOT_API_URL is this Netlify site's own address ({site}); it must be the BOT's\n"
+                 "public https address - that is where the API the app calls lives.")
 
 
 def headers_file(api_base):
@@ -68,7 +89,16 @@ Note the `https://<name>.pages.dev` address it prints.
 
 ## Netlify
 
-Drag this folder onto https://app.netlify.com/drop, or `netlify deploy --dir webapp-dist`.
+Two ways:
+
+* **Git-connected (recommended)**: the repo's `netlify.toml` builds this folder on every push.
+  In Netlify: Add new site -> Import an existing project -> GitHub -> this repo. Before the
+  first deploy, set `BOT_API_URL` to the bot's public https address (Site settings ->
+  Environment variables). The build refuses to ship an app that would call the static site
+  instead of the bot, with the fix in the message.
+* **Drag and drop**: drag this folder onto https://app.netlify.com/drop, or
+  `netlify deploy --dir webapp-dist`.
+
 The `_headers` and `_redirects` files are already here and are picked up automatically.
 
 ## Vercel
@@ -102,6 +132,7 @@ def build(api_base):
     api_base = (api_base or "").strip().rstrip("/")
     if api_base and not api_base.startswith("https://"):
         sys.exit(f"API base must be an https address (Telegram only opens https web apps): {api_base!r}")
+    netlify_guard(api_base)
     if os.path.isdir(OUT):
         shutil.rmtree(OUT)
     os.makedirs(os.path.join(OUT, "static"))
@@ -137,5 +168,5 @@ def build(api_base):
 
 
 if __name__ == "__main__":
-    base = sys.argv[1] if len(sys.argv) > 1 else os.getenv("WEBAPP_URL", "")
+    base = sys.argv[1] if len(sys.argv) > 1 else os.getenv("BOT_API_URL", "")
     build(base)
