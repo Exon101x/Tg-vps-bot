@@ -81,4 +81,25 @@ for name, t in src.t.items():
         if "TEXT" in str(col.type.compile(dialect=mysql.dialect())): problems.append(f"{name}.{col.name} is TEXT in a key")
 ok(not problems, "5. MySQL DDL: no TEXT defaults/keys %s" % problems)
 ok("BIGINT" in str(CreateTable(src.t['servers']).compile(dialect=mysql.dialect())), "5b. Telegram ids are BIGINT on MySQL")
+
+# ---- 6. the from-scratch HTTPS walkthrough (docs/DEPLOY.md + docker-compose.yml)
+HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+deploy_doc = open(os.path.join(HERE, "docs", "DEPLOY.md"), encoding="utf-8").read()
+sec = deploy_doc[deploy_doc.index("## From a bare VPS to"):]
+ok("## From a bare VPS to https://bot.example.com" in deploy_doc
+   and "[From a bare VPS to https://bot.example.com](#from-a-bare-vps-to-httpsbotexamplecom)" in deploy_doc,
+   "6. the from-scratch HTTPS section exists and the table of contents links to it")
+ok("dig +short bot.example.com" in sec and "Type: A" in sec,
+   "6b. DNS step shows the A record and how to verify it resolved")
+ok("reverse_proxy 127.0.0.1:8080" in sec and "certbot --nginx -d bot.example.com" in sec,
+   "6c. both TLS proxy recipes present (Caddy two-liner and nginx+certbot)")
+ok("HEALTH_PORT=8080" in sec and "WEBAPP_URL=https://bot.example.com" in sec and "HEALTH_BIND=0.0.0.0" in sec,
+   "6d. the .env wiring names all three variables the chain needs")
+ok("BOT_API_URL" in sec and "ALLOWED_ORIGINS=https://your-app.netlify.app" in sec,
+   "6e. the section closes the loop with the Netlify split setup (BOT_API_URL in, ALLOWED_ORIGINS back)")
+compose = open(os.path.join(HERE, "docker-compose.yml"), encoding="utf-8").read()
+ok("#   - \"127.0.0.1:8080:8080\"" in compose and "ports:" not in compose.replace("# ports:", ""),
+   "6f. compose ships the port block commented out and loopback-only (the TLS proxy reaches it, the internet cannot)")
+ok("HEALTH_PORT" in compose and "Without it, the bot stays chat-only" in compose,
+   "6g. compose documents that the HTTP server starts only with HEALTH_PORT/PORT set")
 print("ALL INFRA PASSED")

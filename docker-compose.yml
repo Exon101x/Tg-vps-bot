@@ -6,6 +6,11 @@
 # .env needs API_ID, API_HASH, BOT_TOKEN, SECRET_KEY, ALLOWED_USERS and, for a database below:
 #   DATABASE_URL=postgresql://bot:botpass@postgres:5432/bot
 #   DATABASE_URL=mongodb://mongo:27017/bot
+#
+# Mini App / HTTPS: the bot's HTTP server only starts when HEALTH_PORT (or PORT) is set. To serve
+# https://bot.example.com, uncomment ports below, set HEALTH_PORT=8080 + HEALTH_BIND=0.0.0.0 in .env,
+# and put a TLS proxy (Caddy/nginx) on the host forwarding to 127.0.0.1:8080 - full walkthrough in
+# docs/DEPLOY.md, "From a bare VPS to https://bot.example.com". Without it, the bot stays chat-only.
 services:
   bot:
     build: .
@@ -13,6 +18,9 @@ services:
     restart: unless-stopped
     volumes:
       - bot-data:/data
+    # publishing on loopback only: the TLS proxy on the host reaches it, the internet cannot
+    # ports:
+    #   - "127.0.0.1:8080:8080"   # needs HEALTH_PORT=8080 in .env
 
   postgres:
     image: postgres:16-alpine

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.9.3 — from a bare VPS to https://bot.example.com
+
+* **New DEPLOY.md section**: the full from-scratch chain for the bot's public HTTPS
+  address — the thing `WEBAPP_URL` needs and the split setup pastes into Netlify as
+  `BOT_API_URL`. Domain choice, the DNS A record (+ `dig` check), firewall (ufw and
+  cloud security groups), a Caddy TLS proxy (two lines) with an nginx+certbot
+  alternative, the `.env` wiring (`HEALTH_PORT` + `HEALTH_BIND` + `WEBAPP_URL`),
+  Docker's loopback port publishing, and curl verification. The existing "HTTPS for
+  the Mini App" section stays as the quick recipe and links to it; `.env.example`'s
+  `BOT_API_URL` block points there too.
+* **docker-compose.yml**: a commented `ports:` block (`127.0.0.1:8080:8080`) plus a
+  note that the bot's HTTP server only starts with `HEALTH_PORT`/`PORT` set — Docker
+  users previously had no documented path to a public address at all.
+* check_infra: new checks pin the section's key facts (loopback-only publishing,
+  `HEALTH_PORT` gate, TOC anchor, Caddy/nginx snippets).
+
 ## 1.9.2 — .env.example: the complete A-to-Z template
 
 * **Rewritten `.env.example`**: every environment variable the bot reads (55+), grouped

@@ -26,6 +26,7 @@ IP, no domain and no webhook. Anything that runs a Docker image or Python 3.10+ 
 - [Step 5 — Verify the deployment](#step-5--verify-the-deployment)
 - [Step 6 — After the first run](#step-6--after-the-first-run)
 - [Sessions, locking and restarts](#sessions-locking-and-restarts)
+- [From a bare VPS to https://bot.example.com](#from-a-bare-vps-to-httpsbotexamplecom)
 - [HTTPS for the Mini App](#https-for-the-mini-app)
 - [Hosting the Mini App elsewhere](#hosting-the-mini-app-elsewhere)
 - [Troubleshooting](#troubleshooting)
@@ -350,10 +351,140 @@ unreadable (see the troubleshooting row *saved servers vanish*).
   this one shuts down instead of fighting over the session. `DISABLE_LOCK=1` turns this off (single-copy
   setups only).
 
+## From a bare VPS to https://bot.example.com
+
+The bot only *needs* outbound connectivity (chat commands work with no port open at all). You need a
+public HTTPS address for exactly two things: the **Mini App** (`/app`, the menu button) and **payment
+webhooks** — and, in the split setup, that address is what you paste into Netlify as `BOT_API_URL`.
+This section builds it from nothing: a domain, DNS, a TLS proxy, and the four `.env` lines that wire
+it together. Telegram only opens web apps from HTTPS with a valid certificate — `http://` or
+self-signed will not work.
+
+**What you end up with:** `https://bot.example.com` → TLS proxy (443) → bot's HTTP server
+(`127.0.0.1:8080`) serving the Mini App, its JSON API and `/health`.
+
+### 1. Buy a domain (or reuse one you own)
+
+Any registrar works (Namecheap, Cloudflare Registrar, Porkbun, GoDaddy...). Pick a subdomain you
+will dedicate to the bot — `bot.example.com` here. If the domain already has other records, adding
+one more subdomain changes nothing for them.
+
+### 2. Point DNS at the VPS
+
+In the registrar's DNS panel, create an **A record** (or **AAAA** for IPv6):
+
+```
+Type: A    Host: bot    Value: 203.0.113.10    TTL: auto/3600
+```
+
+`203.0.113.10` is your VPS's public IPv4 (`ip addr` on it, or the provider's dashboard). Wait for
+propagation — usually minutes, occasionally up to an hour — then check from anywhere:
+
+```bash
+dig +short bot.example.com        # must print 203.0.113.10
+```
+
+Cloudflare's orange-cloud proxy also works (the bot's WebSocket-free JSON API needs nothing special),
+but for the first bring-up keep it **DNS-only** (grey cloud) so issues isolate cleanly; you can
+re-enable it later. Some providers block port 443 on fresh servers or block MTProto outbound — if the
+bot never connects to Telegram, check the provider's firewall page.
+
+### 3. Open the firewall
+
+Ubuntu/Debian with `ufw`:
+
+```bash
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp     # needed for Let's Encrypt issuance/renewal
+sudo ufw allow 443/tcp
+sudo ufw enable && sudo ufw status
+```
+
+(CentOS/Alma: the same ports in `firewall-cmd --permanent --add-port=...`; cloud panels often add a
+*second* security-group layer — allow 80/443 there too.)
+
+### 4. Put a TLS proxy on the host
+
+The proxy owns ports 80/443, gets the certificate from Let's Encrypt and forwards to the bot. **Caddy
+is the shortest path** — automatic certificates and renewal, one file:
+
+```bash
+# install (apt): https://caddyserver.com/docs/install
+sudo mkdir -p /etc/caddy && sudo tee /etc/caddy/Caddyfile >/dev/null <<'EOF'
+bot.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+EOF
+sudo systemctl reload caddy    # certificate is issued on first request
+```
+
+Already running nginx, or prefer it? `certbot --nginx` edits the site for you:
+
+```bash
+sudo apt install -y nginx certbot python3-certbot-nginx
+sudo tee /etc/nginx/sites-available/bot >/dev/null <<'EOF'
+server {
+    listen 80;
+    server_name bot.example.com;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        client_max_body_size 0;   # uploads through the app: no nginx cap
+    }
+}
+EOF
+sudo ln -sf /etc/nginx/sites-available/bot /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d bot.example.com    # obtains the cert, adds the 443 server block, auto-renews
+```
+
+### 5. Turn the bot's HTTP server on and point everything at the name
+
+The bot's HTTP server **only starts when `HEALTH_PORT` (or `PORT`) is set** — without it the bot is
+chat-only. In `.env`:
+
+```bash
+HEALTH_PORT=8080                # the port the server listens on
+HEALTH_BIND=0.0.0.0             # reachable through the proxy
+WEBAPP_URL=https://bot.example.com   # /app button, menu button, payment callbacks
+```
+
+**Docker users** also need the port published: uncomment the `ports:` block in `docker-compose.yml`
+(`127.0.0.1:8080:8080`) — the proxy runs on the host, so loopback publishing is enough and the port
+stays off the internet. **systemd/venv users** need nothing extra: the proxy and the bot share the
+host, and `127.0.0.1` works too (set `HEALTH_BIND=127.0.0.1` then; it is the tighter default when
+no Docker layer sits between).
+
+Restart the bot (`docker compose up -d --build` / `sudo systemctl restart vpsbot`) and verify:
+
+```bash
+curl -fsS https://bot.example.com/health | head -c1; echo    # 1 - the bot's own answer
+curl -fsSI https://bot.example.com/ | grep -i '^content-security' # the CSP the Mini App needs
+```
+
+The bot's startup log confirms it: `Started. database=... health_port=8080`.
+
+### 6. Finish the bindings
+
+* **BotFather** (optional): *Bot Settings → Menu Button* → `https://bot.example.com` — the "Open app"
+  button appears in every chat. `/app` in the bot does the same.
+* **Netlify split setup** (if you host the Mini App on Netlify): the address you just built is the
+  value of `BOT_API_URL` in *Site settings → Environment variables* — that is where the app's API
+  calls go. Then point back the other way: `ALLOWED_ORIGINS=https://your-app.netlify.app` in the
+  bot's `.env`, restart, and follow ["Hosting the Mini App elsewhere"](#hosting-the-mini-app-elsewhere).
+* Payment gateways (UPI Gateway webhook, CryptAPI callback domain) consume the same
+  `WEBAPP_URL` — nothing new to configure when it is set.
+
+Certificate renewal is automatic in both proxies (Caddy built-in; certbot's systemd timer). Nothing
+in the bot ever needs restarting for a renewed certificate.
+
 ## HTTPS for the Mini App
 
 The Mini App (`/app`) is served by the bot's own HTTP port, but Telegram only opens web apps from an
-**HTTPS** address with a valid certificate. The two-step recipe:
+**HTTPS** address with a valid certificate. Starting from a VPS with no domain yet? The full chain —
+domain, DNS, TLS proxy, firewall, `.env` wiring — is
+["From a bare VPS to https://bot.example.com"](#from-a-bare-vps-to-httpsbotexamplecom) above.
+Already have the domain and a proxy? The two-step recipe:
 
 1. Expose the port over HTTPS:
 
