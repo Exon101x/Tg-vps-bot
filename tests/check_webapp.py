@@ -362,4 +362,55 @@ ok(r.returncode == 0 and 'window.API_BASE="https://env-bot.example.com"' in open
 nt = open(os.path.join(REPO, "netlify.toml")).read()
 ok("scripts/build_webapp.py" in nt and "webapp-dist" in nt,
    "19l. netlify.toml builds webapp-dist (a Git-connected Netlify site redeploys the app on every push)")
+
+# ------------------------------------------- 20. the .env template covers every variable the code reads
+import ast
+import re as _re
+
+# runtime + tooling files that read the environment; tests themselves are exempt
+env_files = ["bot.py", "webapi.py", "payments.py", "hosting.py", "store.py", "subscriptions.py",
+             "session_sync.py", "perf.py", "healthcheck.py", "jobs.py", "util.py",
+             "deploy.py", "setup_gateway.py", "scripts/build_webapp.py"]
+read_vars, envattr = set(), ("getenv", "environ")
+for rel in env_files:
+    tree = ast.parse(open(os.path.join(REPO, rel), encoding="utf-8").read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in envattr and node.args and isinstance(node.args[0], ast.Constant):
+            name = node.args[0].value
+            if isinstance(name, str):  # plain string literal: BOT_TOKEN, WEB_RATE, ...
+                read_vars.add(name)
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) \
+                and node.value.attr == "environ" and isinstance(node.value.value, ast.Name) \
+                and node.value.value.id == "os" and isinstance(node.slice, ast.Constant):
+            if isinstance(node.slice.value, str):  # os.environ["API_ID"]
+                read_vars.add(node.slice.value)
+
+# variables of other services / the platform, not of this bot - not template material
+skip = {"PATH", "HOME", "USER", "PWD", "TMPDIR", "PYTHONUNBUFFERED", "NETLIFY", "URL",
+        "DEPLOY_PRIME_URL", "RENDER", "RENDER_EXTERNAL_URL", "POSTGRES_PASSWORD",
+        "CRYPTAPI_BTC_ADDR", "CRYPTAPI_TRC20_USDT_ADDR"}  # last two: examples of the <COIN> pattern
+
+template = open(os.path.join(REPO, ".env.example"), encoding="utf-8").read()
+tkeys = {m.group(1) for m in _re.finditer(r"^#?([A-Z][A-Z0-9_]*)=", template, _re.M)}
+missing = sorted(v for v in read_vars - skip if v not in tkeys)
+ok(not missing, f"20. every env var the code reads is in .env.example (missing: {missing or 'none'})")
+
+# the two parsers that read/write .env must both swallow the template whole
+sys.path.insert(0, REPO)
+import deploy as d  # noqa: E402  (stdlib-only module; imported late like a test fixture)
+import setup_gateway as sg  # noqa: E402
+dv, sv = d.read_env(os.path.join(REPO, ".env.example")), sg.read_env(os.path.join(REPO, ".env.example"))
+ok(all(dv.get(k, "") == "" for k in ("API_ID", "API_HASH", "BOT_TOKEN", "SECRET_KEY", "ALLOWED_USERS")),
+   "20b. the template ships with every required var empty (deploy.py reads it as a fresh start)")
+ok(all(k in tkeys for k in sv)
+   and set(sv.values()) <= {"", "10", "90", "4096", "0.0.0.0", "300", "90", ".", "60", "INFO", "0", "1900", "5", "auto"},
+   "20c. setup_gateway.py parses the template: every value empty or the code's own default, no secrets")
+# required block sanity: the 5 keys exist uncommented, and every active value is a safe default
+active = {m.group(1): m.group(2) for m in _re.finditer(r"^([A-Z][A-Z0-9_]*)=(.*)$", template, _re.M)}
+ok({"API_ID", "API_HASH", "BOT_TOKEN", "SECRET_KEY", "ALLOWED_USERS"} <= set(active),
+   "20d. the 5 required keys are present and uncommented (the ones the bot refuses to start without)")
+ok(active.get("SESSION_DIR") == "." and active.get("DB_CONNECT_RETRIES") == "10"
+   and active.get("LOG_LEVEL") == "INFO" and active.get("PERFORMANCE") == "auto",
+   "20e. active tuning defaults match the code's own (SESSION_DIR, DB_CONNECT_RETRIES, LOG_LEVEL, PERFORMANCE)")
 print("ALL WEBAPP CHECKS PASSED")

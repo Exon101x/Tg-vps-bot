@@ -112,7 +112,9 @@ sudo apt install -y python3-venv          # Ubuntu / Debian; Python 3.10+ requir
 python3 -m venv myenv                     # modern distros lock the system pip (PEP 668) - use a venv
 source myenv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # fill in API_ID, API_HASH, BOT_TOKEN, SECRET_KEY, ALLOWED_USERS
+cp .env.example .env        # the A-to-Z template: every variable, grouped and commented;
+                            #   fill in API_ID, API_HASH, BOT_TOKEN, SECRET_KEY, ALLOWED_USERS
+python deploy.py --check    # validate the filled .env, then:
 python bot.py               # or: python deploy.py --target systemd --run (service, autorestart)
 ```
 

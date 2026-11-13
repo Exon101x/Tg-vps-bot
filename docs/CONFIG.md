@@ -2,7 +2,9 @@
 
 Everything is configured with environment variables. A `.env` file next to the bot works too —
 real environment variables win over it (the file is a fallback, not an override).
-`.env.example` in the repository root is the annotated template.
+`.env.example` in the repository root is the annotated template — a complete A-to-Z file covering
+every variable the bot reads, grouped and commented: copy it, fill in the five required vars, and
+run `python deploy.py --check` to validate. Nothing outside it exists to configure.
 
 **Robust by design:** every *optional* numeric variable is parsed tolerantly — a typo logs a warning and
 falls back to the default. The bot never crashes at import over a config mistake; only a broken *required*

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.9.2 — .env.example: the complete A-to-Z template
+
+* **Rewritten `.env.example`**: every environment variable the bot reads (55+), grouped
+  into eleven sections — required, database, admin & community, web/Mini App, HTTP &
+  health, VPS hosting, subscriptions & payments, session & single-instance, logging,
+  transfer tuning, and the static-host block for the split Netlify setup (`BOT_API_URL`,
+  with a note that the bot itself never reads it at runtime). Previously undocumented
+  vars (`CRYPTAPI_BASE`, `MONGO_DB`, `BOT_DB`, `KEEP_ALIVE_INTERVAL`, `ALLOWED_ORIGINS`,
+  `HEALTH_BIND`/`HEALTH_PORT`/`PORT`, `DB_CONNECT_RETRIES`) now have a home with their
+  type, default and range.
+* **Drift-proof test (group 20)**: an AST scan collects every `os.getenv`/`os.environ`
+  literal in the runtime and tooling code and asserts it appears in the template — a new
+  variable without a template entry fails CI. It caught `CRYPTAPI_BASE` on its first run.
+  The same test runs both real `.env` parsers (`deploy.py`, `setup_gateway.py`) over the
+  template and pins the five required keys as present-and-empty.
+* Verified end to end: a filled copy of the template passes `python deploy.py --check`;
+  93 webapp checks, suite 19 passed / 2 skipped, ruff + links clean.
+
 ## 1.9.1 — Netlify: one env var, deploy on every push
 
 * **`netlify.toml` in the repo**: a Netlify site connected to the GitHub repo now builds and
