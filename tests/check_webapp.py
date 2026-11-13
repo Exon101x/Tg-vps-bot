@@ -70,6 +70,16 @@ def authed(route, data=None, extra=None):
     return req("POST", "/api/" + route, json.dumps(data or {}),
                {"X-Tg-Init-Data": good, "Content-Type": "application/json", **(extra or {})})
 
+def reqh(method, path, body=None, headers=None):
+    """req(), but returns the response headers too (CORS checks need them)."""
+    c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=20)
+    c.request(method, path, body=body, headers=headers or {})
+    r = c.getresponse()
+    data = r.read()
+    hs = {k.lower(): v for k, v in r.getheaders()}
+    c.close()
+    return r.status, hs, data
+
 status, body = req("GET", "/health")
 ok(status == 200 and body == {"status": "ok"}, "3. /health still answers the platform JSON")
 ok(req("GET", "/healthz")[0] == 200, "3b. /healthz answers (render.yaml's path)")
@@ -83,12 +93,52 @@ ok(req("GET", "/static/webapi.py", raw=True)[0] == 404, "3f. non-whitelisted pat
 ok(req("GET", "/static/../../bot.py", raw=True)[0] == 404, "3g. traversal attempts are 404")
 ok(req("GET", "/")[0] == 200, "3h. unknown paths still answer 200 (old health behaviour)")
 ok(authed("me")[1]["servers"] == [], "3i. /api/me lists the user's (empty) server set")
-ok(req("POST", "/api/me", "{}", {"Content-Type": "application/json"})[0] == 401, "3j. no signature -> 401")
-ok(authed("me", extra=None)[0] == 200, "3k. signed request from an allowed user -> 200")
+
+# ---------------------------------------------------------------- 3j-3q. CORS: the app hosted elsewhere
+# The default test bot has no WEBAPP_URL and no ALLOWED_ORIGINS: every origin must be refused.
+st, hs, _ = reqh("OPTIONS", "/api/me", headers={"Origin": "https://stranger.example",
+                                                "Access-Control-Request-Method": "POST"})
+ok(st == 403 and "access-control-allow-origin" not in hs,
+   "3j. preflight from an unlisted origin is refused (no ACAO header)")
+st, hs, body = reqh("POST", "/api/me", json.dumps({}), {"Origin": "https://stranger.example",
+                                                        "X-Tg-Init-Data": good})
+ok(st == 200 and "access-control-allow-origin" not in hs and b"servers" in body,
+   "3k. a real request from an unlisted origin still works but carries no CORS headers (curl-like: no browser involved)")
+# Now allow an origin like a split setup would, and check the full preflight dance.
+webapi.ALLOWED_ORIGINS.add("https://bot-app.pages.dev")
+st, hs, _ = reqh("OPTIONS", "/api/me", headers={"Origin": "https://bot-app.pages.dev",
+                                                "Access-Control-Request-Method": "POST",
+                                                "Access-Control-Request-Headers": "content-type, x-tg-init-data"})
+ok(st == 204 and hs.get("access-control-allow-origin") == "https://bot-app.pages.dev"
+   and "x-tg-init-data" in hs.get("access-control-allow-headers", "").lower()
+   and hs.get("access-control-max-age") == "86400",
+   "3l. preflight from the allowlisted origin: 204, the origin echoed, app headers allowed, cacheable")
+st, hs, _ = reqh("OPTIONS", "/api/up/chunk", headers={"Origin": "https://bot-app.pages.dev",
+                                                      "Access-Control-Request-Method": "POST"})
+ok("x-up-offset" in hs.get("access-control-allow-headers", "").lower(),
+   "3m. the upload chunk headers (X-Up-Token/X-Up-Offset) are allowed too - big uploads survive CORS")
+st, hs, body = reqh("POST", "/api/me", json.dumps({}), {"Origin": "https://bot-app.pages.dev",
+                                                        "X-Tg-Init-Data": good})
+ok(st == 200 and hs.get("access-control-allow-origin") == "https://bot-app.pages.dev",
+   "3n. an authed cross-origin POST carries the CORS header (errors too: the header is on every /api answer)")
+st, hs, body = reqh("POST", "/api/me", json.dumps({}), {"Origin": "https://bot-app.pages.dev"})
+ok(st == 401 and hs.get("access-control-allow-origin") == "https://bot-app.pages.dev",
+   "3o. a cross-origin POST without initData: 401, still CORS-labelled (the browser can read the error)")
+webapi.WEBAPP_URL = "https://vps.example.com"
+st, hs, _ = reqh("OPTIONS", "/api/me", headers={"Origin": "https://vps.example.com",
+                                                "Access-Control-Request-Method": "POST"})
+ok(st == 204, "3p. WEBAPP_URL is allowed without repeating it in ALLOWED_ORIGINS")
+st, hs, _ = reqh("OPTIONS", "/api/me", headers={"Origin": "https://vps.example.com/",
+                                                "Access-Control-Request-Method": "POST"})
+ok(st == 204, "3q. a trailing slash on the origin matches (origins are normalised)")
+webapi.WEBAPP_URL = ""
+webapi.ALLOWED_ORIGINS.clear()
+ok(req("POST", "/api/me", "{}", {"Content-Type": "application/json"})[0] == 401, "3r. no signature -> 401")
+ok(authed("me", extra=None)[0] == 200, "3s. signed request from an allowed user -> 200")
 other = make_init(TOKEN, 8)  # uid 8 is NOT in ALLOWED_USERS {7}
-ok(req("POST", "/api/me", "{}", {"X-Tg-Init-Data": other})[0] == 403, "3l. signed but not on ALLOWED_USERS -> 403")
-ok(authed("nope")[0] == 404, "3m. unknown route -> 404")
-ok(req("GET", "/api/me", headers={"X-Tg-Init-Data": good})[0] == 405, "3n. GET on an api route -> 405")
+ok(req("POST", "/api/me", "{}", {"X-Tg-Init-Data": other})[0] == 403, "3t. signed but not on ALLOWED_USERS -> 403")
+ok(authed("nope")[0] == 404, "3u. unknown route -> 404")
+ok(req("GET", "/api/me", headers={"X-Tg-Init-Data": good})[0] == 405, "3v. GET on an api route -> 405")
 
 # ---------------------------------------------------------------- 3. local SSH server + server APIs
 ROOT = tempfile.mkdtemp()
@@ -252,4 +302,36 @@ ok(len(notes) == 1 and notes[0][0] == UID and "removed" in notes[0][1] and store
 
 dockerfile = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Dockerfile")).read()
 ok("COPY webapp/" in dockerfile, "18. the Docker image ships the webapp/ assets (else /app would 404 in containers)")
+
+# ---------------------------------------------------------------- 19. the static-hosting build (scripts/build_webapp.py)
+import subprocess
+REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+out = os.path.join(REPO, "webapp-dist")
+subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_webapp.py"), "https://vps.example.com"],
+               check=True, capture_output=True, timeout=60)
+built_html = open(os.path.join(out, "index.html")).read()
+ok('window.API_BASE="https://vps.example.com"' in built_html
+   and built_html.index("window.API_BASE") < built_html.index("/static/app.js"),
+   "19. the build injects API_BASE before app.js (a static host serves the app, the VPS answers the API)")
+built_js = open(os.path.join(out, "static", "app.js")).read()
+ok('API_BASE + "/api/"' in built_js and 'API_BASE + "/api/up/chunk"' in built_js
+   and built_js.count('fetch("/api/') == 0,
+   "19b. the app's fetches all go through API_BASE (same-origin by default, the bot's address when split)")
+hdrs = open(os.path.join(out, "_headers")).read()
+ok("connect-src 'self' https://vps.example.com" in hdrs and "frame-ancestors" in hdrs,
+   "19c. the build's _headers carries a CSP that allows the API host (like the bot's own CSP, plus connect-src)")
+ok(open(os.path.join(out, "_redirects")).read().strip().endswith("200")
+   and os.path.exists(os.path.join(out, "README.md")) and os.path.exists(os.path.join(out, "static", "logo.png")),
+   "19d. _redirects, README and the logo ship in the build")
+r = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_webapp.py"), "http://plain.example"],
+                   capture_output=True, text=True, timeout=60)
+ok(r.returncode != 0 and "https" in r.stderr,
+   "19e. a non-https API base is refused (Telegram only opens https web apps)")
+subprocess.run([sys.executable, os.path.join(REPO, "scripts", "build_webapp.py"), ""], check=True, capture_output=True, timeout=60)
+ok('window.API_BASE' not in open(os.path.join(out, "index.html")).read()
+   and 'API_BASE + "/api/"' in open(os.path.join(out, "static", "app.js")).read(),
+   "19f. an empty base builds the same-origin variant (the bot serving the app itself needs no injection)")
+src_html = open(os.path.join(REPO, "webapp", "index.html")).read()
+ok('window.API_BASE' not in src_html,
+   "19g. the webapp/ source stays untouched: only the build output carries the injected base")
 print("ALL WEBAPP CHECKS PASSED")

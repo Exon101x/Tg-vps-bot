@@ -67,9 +67,11 @@ METHODS = {
 }
 WRITABLE = {k for m in METHODS.values() for k in m["required"] + m["optional"]} - {"CRYPTAPI_ADDR"}
 WRITABLE.add("WEBAPP_URL")
+WRITABLE.add("ALLOWED_ORIGINS")  # the split-hosting setup: app on a static host, API on the bot
 
 VPA_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.\-_]{1,63}@[a-zA-Z][a-zA-Z0-9.\-]{1,31}$")
 URL_RE = re.compile(r"^https?://[a-zA-Z0-9.\-]+(:\d{1,5})?(/.*)?$")
+ORIGIN_RE = re.compile(r"^https://[a-zA-Z0-9.\-]+(:\d{1,5})?$")  # scheme + host, no path: what a browser sends
 
 C = {"g": "\033[92m", "y": "\033[93m", "r": "\033[91m", "b": "\033[96m", "d": "\033[2m", "0": "\033[0m"}
 
@@ -177,6 +179,8 @@ def check_int(key, val, lo, hi):
 
 CHECKS = {
     "WEBAPP_URL": lambda k, v: check_url(k, v),
+    "ALLOWED_ORIGINS": lambda k, v: "" if all(ORIGIN_RE.fullmatch(o.strip().rstrip("/")) for o in v.split(",") if o.strip())
+                                 else f"{k} must be https origins (scheme + host, no path), comma-separated",
     "UPIGW_URL": lambda k, v: check_url(k, v),
     "UPIGW_WEBHOOK_SECRET": lambda k, v: "" if len(v or "") >= 16 else f"{k} should be 16+ chars (generate one: --gen-secret)",
     "UPIGW_MAX_SKEW": lambda k, v: check_int(k, v, 30, 3600),

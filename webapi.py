@@ -78,6 +78,26 @@ REPO_URL = "https://github.com/Exon101x/Tg-vps-bot"
 DEV_ID = env_int("DEV_ID", 0)
 DEV_CHANNEL = os.getenv("DEV_CHANNEL", "").strip().lstrip("@")
 
+# Origins allowed to call the API cross-origin (the 'mini app hosted elsewhere' setup): a
+# comma-separated list of https origins, e.g. ALLOWED_ORIGINS=https://bot.pages.dev.
+# WEBAPP_URL is always allowed too, so the common case needs no second variable.
+ALLOWED_ORIGINS = {o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()}
+
+
+def cors_headers(origin):
+    """The Access-Control-Allow-* headers for one request, or {} when this origin is not allowed.
+    API auth is Telegram's initData signature, not cookies: allowing an origin only lets the
+    browser *send* requests - it grants no rights the app opened from Telegram doesn't have."""
+    origin = (origin or "").strip().rstrip("/")
+    allowed = ALLOWED_ORIGINS | ({WEBAPP_URL} if WEBAPP_URL else set())
+    if origin and origin in allowed:
+        return {"Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, X-Tg-Init-Data, X-Up-Token, X-Up-Offset",
+                "Access-Control-Max-Age": "86400",
+                "Vary": "Origin"}
+    return {}
+
 
 def credits():
     """The footer block the UI shows on every tab."""
@@ -169,11 +189,12 @@ async def web_gate(user):
 
 
 # ---------------------------------------------------------------- helpers
-def jdump(obj, status=200):
+def jdump(obj, status=200, cors=None):
     body = json.dumps(obj, default=str).encode()
     head = f"HTTP/1.1 {status} {'OK' if status == 200 else 'Error'}\r\nContent-Type: application/json\r\n" \
            f"Content-Length: {len(body)}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n" \
-           f"Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n"
+           f"Referrer-Policy: no-referrer\r\n" + \
+           "".join(f"{k}: {v}\r\n" for k, v in (cors or {}).items()) + "Connection: close\r\n\r\n"
     return head.encode() + body
 
 
@@ -927,6 +948,7 @@ def static_response(name):
 
 async def api_response(headers, body):
     """Authenticate, gate, dispatch, answer. Errors are JSON with a message the UI shows as-is."""
+    cors = cors_headers(headers.get("origin", ""))  # empty unless the app is hosted elsewhere
     try:
         route = headers["__path"][len("/api/"):]
         fn = ROUTES.get(route)
@@ -947,12 +969,12 @@ async def api_response(headers, body):
                 raise ApiError("request body must be JSON")
         result = await fn(user, data, ctx={"headers": headers, "body": body}) if route == "up/chunk" \
             else await fn(user, data)
-        return jdump(result)
+        return jdump(result, cors=cors)
     except ApiError as e:
-        return jdump({"error": str(e)}, e.status)
+        return jdump({"error": str(e)}, e.status, cors=cors)
     except Exception as e:  # a bug in a handler must not take the bot down
         log.exception("webapi route crashed")
-        return jdump({"error": f"{type(e).__name__}: {e}"}, 500)
+        return jdump({"error": f"{type(e).__name__}: {e}"}, 500, cors=cors)
 
 
 # ---------------------------------------------------------------- payment gateway webhooks
@@ -1003,10 +1025,11 @@ async def cryptapi_webhook(target, headers):
     return _raw_response(200, b"*ok*", "text/plain; charset=utf-8")
 
 
-def _raw_response(status, body, ctype="application/json"):
+def _raw_response(status, body, ctype="application/json", cors=None):
     return (f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
             "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
-            "Cache-Control: no-store\r\nConnection: close\r\n\r\n").encode() + body
+            "Cache-Control: no-store\r\n" + "".join(f"{k}: {v}\r\n" for k, v in (cors or {}).items())
+            + "Connection: close\r\n\r\n").encode() + body
 
 
 async def handle(reader, writer):
@@ -1029,6 +1052,13 @@ async def handle(reader, writer):
             writer.write(await upigw_webhook(headers, body))
         elif path == "/pay/cryptapi/cb" and method in ("GET", "POST"):
             writer.write(await cryptapi_webhook(target, headers))
+        elif method == "OPTIONS" and path.startswith("/api/"):
+            # CORS preflight from a mini app hosted elsewhere. Nothing is executed - the browser
+            # only asks which requests it may send - so an allowlisted origin gets a 204 with
+            # the permission headers, anything else a flat 403.
+            cors = cors_headers(headers.get("origin", ""))
+            writer.write(_raw_response(204, b"", cors=cors) if cors
+                         else _raw_response(403, b'{"error": "origin not allowed"}'))
         else:
             known = path == "/app" or path.startswith("/static/") or path.startswith("/api/")
             if not known:  # /health, /healthz and anything else: the same answer the one-line server gave

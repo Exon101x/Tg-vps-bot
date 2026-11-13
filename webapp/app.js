@@ -1,5 +1,7 @@
 /* vpsbot Mini App. Every request carries the initData Telegram signed for this session; the bot
-   verifies the signature, so there is no login. Vanilla JS only - served by the bot itself. */
+   verifies the signature, so there is no login. Vanilla JS only - served by the bot itself,
+   or hosted anywhere else with <script>window.API_BASE="https://your-vps"</script> before this
+   file (the bot then needs ALLOWED_ORIGINS with the host it is served from). */
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
@@ -9,6 +11,10 @@ const tg = window.Telegram && window.Telegram.WebApp;
 const INIT = tg ? tg.initData : "";
 if (tg) { tg.ready(); tg.expand(); }
 applyTheme();
+
+/* Where the API lives: same origin by default (the bot serves this app itself); a static host
+   elsewhere sets window.API_BASE to the bot's public HTTPS address before loading app.js. */
+const API_BASE = (window.API_BASE || "").replace(/\/+$/, "");
 
 let ME = null;          // {user, servers, active}
 const state = { cwd: "", tab: "files", view: null };
@@ -92,7 +98,7 @@ function haptic(kind) {
 
 /* ---------------------------------------------------------------- api */
 async function api(route, data) {
-  const res = await fetch("/api/" + route, {
+  const res = await fetch(API_BASE + "/api/" + route, {
     method: "POST",
     headers: { "X-Tg-Init-Data": INIT, "Content-Type": "application/json" },
     body: JSON.stringify(data || {}),
@@ -394,7 +400,7 @@ $("#file").onchange = async (e) => {
 async function sendChunk(token, offset, buf) {
   for (let attempt = 1; ; attempt++) {
     try {
-      const res = await fetch("/api/up/chunk", {
+      const res = await fetch(API_BASE + "/api/up/chunk", {
         method: "POST",
         headers: { "X-Tg-Init-Data": INIT, "X-Up-Token": token, "X-Up-Offset": String(offset),
                    "Content-Type": "application/octet-stream" },

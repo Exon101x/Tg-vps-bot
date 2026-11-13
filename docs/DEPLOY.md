@@ -27,6 +27,7 @@ IP, no domain and no webhook. Anything that runs a Docker image or Python 3.10+ 
 - [Step 6 — After the first run](#step-6--after-the-first-run)
 - [Sessions, locking and restarts](#sessions-locking-and-restarts)
 - [HTTPS for the Mini App](#https-for-the-mini-app)
+- [Hosting the Mini App elsewhere](#hosting-the-mini-app-elsewhere)
 - [Troubleshooting](#troubleshooting)
 - [Tips and tricks](#tips-and-tricks)
 
@@ -327,6 +328,9 @@ unreadable (see the troubleshooting row *saved servers vanish*).
   * `DEV_CHANNEL` — your channel, credited in `/about` and the Mini App footer.
   * `FORCE_SUB` — gate usage on channel membership (add the bot as channel admin!).
   * `WEBAPP_URL` — the Mini App (needs HTTPS; see [HTTPS for the Mini App](#https-for-the-mini-app)).
+    Can point at a static host serving the app instead of the bot itself — see
+    [Hosting the Mini App elsewhere](#hosting-the-mini-app-elsewhere); the bot then also wants
+    `ALLOWED_ORIGINS` with that address.
   * `SUBSCRIPTION_CURRENCY` + `SUBSCRIPTION_PLANS` + `PAYMENT_INFO` — sell plans; or a payment
     gateway: `python3 setup_gateway.py` (guided wizard for UPI Gateway / UPI direct / CryptAPI).
   * `VPS_NODE_*` — provision real VPSes for buyers on your own node (root or passwordless sudo).
@@ -384,6 +388,58 @@ Notes: keep-alive pings (`KEEP_ALIVE_URL`) can point at the same URL. If a firew
 the proxy to reach `HEALTH_PORT`. Uploads through the app are capped by `WEB_MAX_MB` (default 4096) and
 staged in the temp directory, so leave some disk headroom on the bot's host.
 
+## Hosting the Mini App elsewhere
+
+The setup above keeps everything on one host: the bot serves the app itself. If your bot runs on a
+**VPS** (or anywhere without easy HTTPS) you can instead host the Mini App's static files on a
+platform that gives you HTTPS for free — Cloudflare Pages, Netlify, Vercel — and leave the API on
+the bot. The app and the API then talk cross-origin, which the bot supports natively since 1.9.0.
+
+The Mini App is four static files (`webapp/`); nothing runs on the static host. Authentication is
+unchanged: every request carries Telegram's initData signature and the bot verifies it, whatever
+origin the app is opened from.
+
+### The three steps
+
+1. **Build the app for static hosting** (rewrites asset paths, injects the API base, adds
+   cache/CSP headers and a README):
+
+   ```bash
+   python scripts/build_webapp.py https://vps.example.com   # your bot's public HTTPS address
+   ```
+
+   This writes `webapp-dist/` (git-ignored). Rebuild after editing `webapp/` or changing the
+   bot's address — the source folder stays the single source of truth.
+
+2. **Deploy `webapp-dist/`** to the static host:
+
+   * **Cloudflare Pages** (recommended): dashboard → Workers & Pages → Create → Pages →
+     *Upload assets*, drop the folder. You get `https://<name>.pages.dev` (or connect a custom
+     domain). No build step, no config — the `_headers` and `_redirects` files in the folder are
+     picked up automatically.
+   * **Netlify**: drag the folder onto https://app.netlify.com/drop, or
+     `netlify deploy --dir webapp-dist`.
+   * **Vercel**: point a project's output directory at `webapp-dist/`.
+   * **Another box of yours**: any nginx `root` with `try_files $uri /index.html;` works too —
+     the README inside the build has the snippet.
+
+3. **Tell the bot where the app lives now**:
+
+   ```bash
+   ALLOWED_ORIGINS=https://your-app.pages.dev   # the static host's address (comma list is fine)
+   WEBAPP_URL=https://your-app.pages.dev        # /app's button and the menu button point at the app
+   ```
+
+   `WEBAPP_URL` origins are always allowed, so the two usually hold the same value;
+   `ALLOWED_ORIGINS` exists for the extra case (custom domains, preview deployments).
+   Restart the bot after changing them.
+
+Uploads from the app still stream through the bot (chunked, resumable) — the static host only
+ever serves files, so its free tier limits don't matter. If the app opens but shows sign-in
+errors, check that `ALLOWED_ORIGINS` matches the address bar of the web app exactly (scheme +
+host, no path) and that the bot's clock is in sync (`timedatectl status`).
+
+
 ## Troubleshooting
 
 Start here: the eight symptoms every deployment hits, then the full table. **The log line is always the
@@ -436,6 +492,7 @@ diagnosis** — `docker compose logs bot` / `journalctl -u vpsbot` / the PaaS lo
 | Uploads stuck in `queued` | A previous copy was stopped mid-upload; the queue resumes on start. `/queue` → **Retry failed** for the red ones. Still stuck → `/stop all`, then re-send |
 | Upload fails at 2 GB on FTP | Telegram caps what it *sends the bot* at 2 GB without Premium — split with `/multi` + `/done` (the bot joins volumes while streaming, no extra disk needed) |
 | Mini App opens blank / "how to enable" | `WEBAPP_URL` missing or not HTTPS. Set it to the bot's public HTTPS address; on your own VPS proxy `HEALTH_BIND=127.0.0.1` through nginx/Caddy first |
+| Mini App (on a static host) loads but every action fails | The app's origin is not allowlisted on the bot: set `ALLOWED_ORIGINS` to the static host's address (scheme + host, no path) and rebuild `webapp-dist/` with the bot's correct address if it changed |
 | Mini App sign-in fails | The app must be opened from Telegram (the `/app` button), not a browser tab — the signature comes from Telegram's client. Clock skew > 5 min also breaks it: sync time (`timedatectl status`) |
 | Payments not auto-activating | Gateway webhook did not arrive. Check the gateway's dashboard; the bot also self-heals via a polling backstop. For CryptAPI, the `WEBAPP_URL` domain must be verified once at cryptapi.io |
 | `/admin` says admins only | `DEV_ID` or `ADMINS` not set to your id, or set with a typo (must be numeric). Check with `/about` — it shows the admin line only to admins |

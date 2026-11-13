@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.9.0 — host the Mini App anywhere, keep the bot on your VPS
+
+* **Split hosting, natively supported.** The Mini App's four static files can now live on
+  any static host (Cloudflare Pages, Netlify, Vercel, your own nginx) while the bot and its
+  API stay on the VPS. `python scripts/build_webapp.py https://your-vps` writes a ready-to-
+  drop `webapp-dist/` — asset paths rewritten, the API base injected, cache + CSP headers
+  and a platform-by-platform README inside. The bot gains CORS: `OPTIONS` preflights and
+  `Access-Control-Allow-*` headers on every API answer, gated by the new `ALLOWED_ORIGINS`
+  env var (comma list; `WEBAPP_URL` is always allowed). API auth is unchanged — Telegram's
+  initData signature is verified whatever origin the app is opened from, so allowing an
+  origin grants no rights the app doesn't already have.
+* The frontend's fetches now go through one `API_BASE` (same-origin by default — the
+  bot-served app behaves exactly as before; the build injects the bot's address when the
+  app is hosted elsewhere). `webapp/` sources stay untouched; only the build output differs.
+* `setup_gateway.py` can edit and validate `ALLOWED_ORIGINS` alongside `WEBAPP_URL`.
+* Tests: 17 new checks in `tests/check_webapp.py` — the CORS preflight dance (refusal,
+  allowlist, upload-chunk headers, error responses stay CORS-labelled, WEBAPP_URL and
+  trailing-slash normalisation) and the build output (injection, CSP, https-only guard,
+  same-origin variant, source untouched). Docs: DEPLOY.md gets a "Hosting the Mini App
+  elsewhere" section with the three-step recipe; CONFIG.md documents `ALLOWED_ORIGINS`.
+
 ## 1.8.9 — commands and buttons: no more dead ends
 
 * **Unknown commands get an answer, not silence.** Every unrecognized `/command` now
